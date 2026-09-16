@@ -1,0 +1,81 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [],
+  "liveNow": true,
+  "panels": [
+    {
+      "collapsed": false,
+      "gridPos": { "h": 6, "w": 6, "x": 0, "y": 0 },
+      "id": 1,
+      "title": "Tasks Running",
+      "type": "stat",
+      "targets": [
+        { "expr": "sum(mapreduce_tasks_running)", "refId": "A" }
+      ]
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 6, "w": 6, "x": 6, "y": 0 },
+      "id": 2,
+      "title": "Tasks Queued",
+      "type": "stat",
+      "targets": [
+        { "expr": "sum(mapreduce_tasks_queued)", "refId": "A" }
+      ]
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 6, "w": 6, "x": 12, "y": 0 },
+      "id": 3,
+      "title": "Clean Preemption Drains",
+      "type": "stat",
+      "targets": [
+        { "expr": "mapreduce_preemptions_total", "refId": "A" }
+      ]
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 6, "w": 6, "x": 18, "y": 0 },
+      "id": 4,
+      "title": "Worker Crashes / Timeouts",
+      "type": "stat",
+      "targets": [
+        { "expr": "mapreduce_crashes_total", "refId": "A" }
+      ]
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 6 },
+      "id": 5,
+      "title": "Task Lifecycle State Over Time",
+      "type": "timeseries",
+      "targets": [
+        { "expr": "mapreduce_tasks_running", "legendFormat": "Running {{task_type}}", "refId": "A" },
+        { "expr": "mapreduce_tasks_queued", "legendFormat": "Queued {{task_type}}", "refId": "B" }
+      ]
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 6 },
+      "id": 6,
+      "title": "Completed Tasks & Checkpoint Commits",
+      "type": "timeseries",
+      "targets": [
+        { "expr": "rate(mapreduce_tasks_completed_total[1m])", "legendFormat": "Completed Tasks/s", "refId": "A" },
+        { "expr": "rate(mapreduce_checkpoint_commits_total[1m])", "legendFormat": "Checkpoints/s", "refId": "B" }
+      ]
+    }
+  ],
+  "refresh": "2s",
+  "schemaVersion": 39,
+  "tags": ["mapreduce", "spot-instances"],
+  "time": { "from": "now-15m", "to": "now" },
+  "timepicker": { "refresh_intervals": ["1s", "2s", "5s", "10s"] },
+  "timezone": "browser",
+  "title": "Transient Spot-Instance MapReduce Dashboard",
+  "uid": "spot-mapreduce-main"
+}

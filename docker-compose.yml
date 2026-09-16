@@ -1,0 +1,158 @@
+networks:
+  mapreduce-net:
+    driver: bridge
+
+volumes:
+  orchestrator-data:
+  rss-data:
+  input-data:
+  output-data:
+  redis-data:
+
+services:
+  orchestrator:
+    build:
+      context: ./orchestrator
+      dockerfile: Dockerfile
+    container_name: orchestrator
+    hostname: orchestrator
+    ports:
+      - "8000:8000"
+    volumes:
+      - orchestrator-data:/data/orchestrator
+      - input-data:/data/input
+      - output-data:/data/output
+    environment:
+      - DB_PATH=/data/orchestrator/state.db
+      - HEARTBEAT_TIMEOUT_SECONDS=5
+      - LEASE_CHECK_INTERVAL_SECONDS=1
+      - RSS_URL=http://rss:8001
+      - LOG_LEVEL=INFO
+    networks:
+      - mapreduce-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: on-failure
+
+  rss:
+    build:
+      context: ./rss
+      dockerfile: Dockerfile
+    container_name: rss
+    hostname: rss
+    ports:
+      - "8001:8001"
+    volumes:
+      - rss-data:/data/rss
+    environment:
+      - RSS_DATA_PATH=/data/rss
+      - LOG_LEVEL=INFO
+    networks:
+      - mapreduce-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  redis:
+    image: redis:7.2-alpine
+    container_name: redis
+    hostname: redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    command: ["redis-server", "--appendonly", "yes", "--save", "60", "1"]
+    networks:
+      - mapreduce-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 2s
+      retries: 5
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: ./worker
+      dockerfile: Dockerfile
+    deploy:
+      replicas: 4
+      restart_policy:
+        condition: on-failure
+        delay: 2s
+        max_attempts: 10
+    volumes:
+      - input-data:/data/input:ro
+      - output-data:/data/output
+    environment:
+      - ORCHESTRATOR_URL=http://orchestrator:8000
+      - RSS_URL=http://rss:8001
+      - REDIS_URL=redis://redis:6379/0
+      - HEARTBEAT_INTERVAL_SECONDS=2
+      - CHECKPOINT_INTERVAL_SECONDS=10
+      - CHECKPOINT_N_RECORDS=1000
+      - LOG_LEVEL=INFO
+    networks:
+      - mapreduce-net
+    depends_on:
+      orchestrator:
+        condition: service_healthy
+      rss:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    stop_grace_period: 30s
+    stop_signal: SIGTERM
+
+  job-client:
+    build:
+      context: ./job-client
+      dockerfile: Dockerfile
+    container_name: job-client
+    volumes:
+      - input-data:/data/input
+      - ./job-client/jobs:/jobs
+    environment:
+      - ORCHESTRATOR_URL=http://orchestrator:8000
+    networks:
+      - mapreduce-net
+    depends_on:
+      orchestrator:
+        condition: service_healthy
+    profiles:
+      - client
+
+  prometheus:
+    image: prom/prometheus:v2.51.2
+    container_name: prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    networks:
+      - mapreduce-net
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:10.4.2
+    container_name: grafana
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./monitoring/grafana/datasource.yml:/etc/grafana/provisioning/datasources/ds.yml:ro
+      - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
+    networks:
+      - mapreduce-net
+    depends_on:
+      - prometheus
+    restart: unless-stopped

@@ -1,0 +1,9 @@
+{
+  "name": "wordcount-benchmark",
+  "map_fn": "worker.jobs.wordcount.map_fn",
+  "reduce_fn": "worker.jobs.wordcount.reduce_fn",
+  "input_path": "/data/input/sample_input.txt",
+  "output_path": "/data/output",
+  "num_mappers": 4,
+  "num_reducers": 4
+}
