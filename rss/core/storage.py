@@ -99,8 +99,20 @@ async def stream_partition(job_id: str, partition_id: int) -> AsyncGenerator[byt
     if not os.path.exists(chunks_dir):
         return
 
-    # List all chunk files sorted by name/timestamp
-    chunk_files = sorted(os.listdir(chunks_dir))
+    manifest = load_manifest(job_id, partition_id)
+    chunks = manifest.get("chunks", [])
+
+    # For each (source_task_id, chunk_seq), pick the chunk with the highest attempt_id
+    best_chunks: Dict[tuple, Dict[str, Any]] = {}
+    for c in chunks:
+        key = (c.get("source_task_id", ""), c.get("chunk_seq", 0))
+        if key not in best_chunks or c.get("attempt_id", 0) >= best_chunks[key].get("attempt_id", 0):
+            best_chunks[key] = c
+
+    valid_filenames = {c["filename"] for c in best_chunks.values()}
+
+    # List and stream matching chunk files in deterministic order
+    chunk_files = sorted([f for f in os.listdir(chunks_dir) if not valid_filenames or f in valid_filenames])
     for fname in chunk_files:
         if fname.endswith(".ndjson"):
             fpath = os.path.join(chunks_dir, fname)

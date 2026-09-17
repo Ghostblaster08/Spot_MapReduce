@@ -61,8 +61,13 @@ def run_map_task(
         chunk_counters = {pid: chk.manifest.get(pid, 0) for pid in range(num_reducers)}
         log.info(f"Resuming task {task_id} from Redis checkpoint: offset={resume_offset}, records={records_processed}, seq={ckpt_seq}")
     else:
-        resume_offset = task.get("resume_from_offset", split_start)
-        records_processed = task.get("resume_from_seq", 0)
+        saved_offset = task.get("resume_from_offset") or 0
+        if saved_offset > split_start:
+            resume_offset = saved_offset
+            records_processed = task.get("resume_from_seq", 0)
+        else:
+            resume_offset = split_start
+            records_processed = 0
         ckpt_seq = 0
         chunk_counters = {pid: 0 for pid in range(num_reducers)}
 
@@ -123,7 +128,6 @@ def run_map_task(
 
     last_ckpt_time = time.monotonic()
     last_ckpt_records = records_processed
-    byte_pos = resume_offset
 
     if not os.path.exists(input_path):
         raise FileNotFoundError(f"Input file not found: {input_path}")
@@ -131,12 +135,18 @@ def run_map_task(
     with open(input_path, "rb") as f:
         f.seek(resume_offset)
 
-        # If not starting at the very beginning of the file, skip the partial line to align
-        if resume_offset > 0:
-            skipped = f.readline()
-            byte_pos += len(skipped)
+        # Standard MapReduce split boundary alignment:
+        # If starting fresh at split_start > 0 and not on a line boundary, discard the partial line
+        if resume_offset == split_start and split_start > 0:
+            f.seek(split_start - 1)
+            prev_byte = f.read(1)
+            f.seek(split_start)
+            if prev_byte != b"\n":
+                f.readline()
 
-        while byte_pos < split_end:
+        byte_pos = f.tell()
+
+        while True:
             # ── Preemption check ──────────────────────────────────
             if sentinel.is_preempting.is_set():
                 log.warning(f"[SENTINEL DRAIN] Preemption signal detected on {task_id}! Initiating emergency drain...")
@@ -162,11 +172,15 @@ def run_map_task(
 
                 return "DRAINED"
 
+            curr_offset = f.tell()
+            if curr_offset >= split_end:
+                break
+
             line_bytes = f.readline()
             if not line_bytes:
                 break
 
-            byte_pos += len(line_bytes)
+            byte_pos = f.tell()
             line_str = line_bytes.decode("utf-8", errors="replace").strip()
             if not line_str:
                 continue

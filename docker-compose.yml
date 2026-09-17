@@ -22,6 +22,7 @@ services:
       - orchestrator-data:/data/orchestrator
       - input-data:/data/input
       - output-data:/data/output
+      - ./orchestrator:/app/orchestrator
     environment:
       - DB_PATH=/data/orchestrator/state.db
       - HEARTBEAT_TIMEOUT_SECONDS=5
@@ -47,6 +48,7 @@ services:
       - "8001:8001"
     volumes:
       - rss-data:/data/rss
+      - ./rss:/app/rss
     environment:
       - RSS_DATA_PATH=/data/rss
       - LOG_LEVEL=INFO
@@ -90,6 +92,7 @@ services:
     volumes:
       - input-data:/data/input:ro
       - output-data:/data/output
+      - ./worker:/app/worker
     environment:
       - ORCHESTRATOR_URL=http://orchestrator:8000
       - RSS_URL=http://rss:8001
