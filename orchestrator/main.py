@@ -11,6 +11,7 @@ from orchestrator.core.barrier_monitor import barrier_monitor_loop
 from orchestrator.api.jobs import router as jobs_router
 from orchestrator.api.tasks import router as tasks_router
 from orchestrator.api.heartbeat import router as heartbeat_router
+from orchestrator.api.dashboard import router as dashboard_router, seed_input_data
 
 logging.basicConfig(
     level=os.environ.get("LOG_LEVEL", "INFO"),
@@ -24,6 +25,7 @@ background_tasks = []
 async def lifespan(app: FastAPI):
     log.info("Starting up MapReduce Orchestrator...")
     await init_db()
+    seed_input_data()
     lease_task = asyncio.create_task(lease_monitor_loop(), name="lease_monitor")
     barrier_task = asyncio.create_task(barrier_monitor_loop(), name="barrier_monitor")
     background_tasks.extend([lease_task, barrier_task])
@@ -47,6 +49,7 @@ app = FastAPI(
 app.include_router(jobs_router)
 app.include_router(tasks_router)
 app.include_router(heartbeat_router)
+app.include_router(dashboard_router)
 
 @app.get("/health", tags=["System"])
 async def health_check():

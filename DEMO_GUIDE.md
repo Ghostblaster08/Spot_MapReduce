@@ -8,7 +8,15 @@ This guide provides step-by-step instructions, CLI commands, and a structured sc
 ## 1. Quick Command Reference
 
 All commands should be executed from the project root:
-`/home/ghostblaster08/Projects/Sem7/ACC/Spot_MapReduce`
+### ⚡ One-Command Complete Live Demo (Recommended)
+
+```bash
+# Interactive mode (prompts between acts with technical commentary):
+./run_demo.sh
+
+# Fully automated mode:
+./run_demo.sh --auto
+```
 
 ### Cluster Lifecycle
 
@@ -86,7 +94,8 @@ docker compose cp orchestrator:/data/output/<JOB_ID> data/output/
 
 | Service | Local URL | What It Demonstrates |
 | :--- | :--- | :--- |
-| **Grafana Dashboard** | [`http://localhost:3000`](http://localhost:3000) | Live visual metrics for **Running Tasks**, **Queued Tasks**, **Clean Preemptions**, and **Crashes**. |
+| **Live Architecture Visualizer** | [`http://localhost:8000/ui`](http://localhost:8000/ui) | **Real-time visual node graph** matching the architecture diagram: Master Plane, Spot Workers (with Preemption status), RSS chunks, Redis CAS keys, live output preview, and interactive demo triggers. |
+| **Grafana Dashboard** | [`http://localhost:3030`](http://localhost:3030) | Live visual metrics for **Running Tasks**, **Queued Tasks**, **Clean Preemptions**, and **Crashes**. |
 | **Orchestrator Swagger UI** | [`http://localhost:8000/docs`](http://localhost:8000/docs) | Interactive API docs showing endpoints for job submission, task leases, heartbeat renews, and stage transitions. |
 | **RSS Shuffle Service UI** | [`http://localhost:8001/docs`](http://localhost:8001/docs) | Decoupled chunk ingestion (`/partitions/{job_id}/{pid}`) and streaming endpoints. |
 | **Prometheus Metrics** | [`http://localhost:9090`](http://localhost:9090) | Direct query interface for time-series metrics (`mapreduce_preemptions_total`, `mapreduce_crashes_total`). |

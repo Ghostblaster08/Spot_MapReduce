@@ -1,6 +1,8 @@
 import os
+import json
 import aiosqlite
 import logging
+from datetime import datetime, timezone
 
 log = logging.getLogger("orchestrator.database")
 
@@ -14,6 +16,19 @@ async def get_db() -> aiosqlite.Connection:
     await db.execute("PRAGMA synchronous = NORMAL;")
     await db.execute("PRAGMA foreign_keys = ON;")
     return db
+
+async def emit(db, kind, source, message, job_id=None, task_id=None, worker_id=None, meta=None):
+    """Append a master-side event to the durable event log (caller commits).
+
+    This is the audit trail the UI renders: every scheduling decision, lease
+    expiry, drain notice, requeue and node change is written here by the code
+    that actually performs it.
+    """
+    await db.execute(
+        "INSERT INTO events (ts, job_id, kind, source, message, task_id, worker_id, meta) VALUES (?,?,?,?,?,?,?,?)",
+        (datetime.now(timezone.utc).isoformat(), job_id, kind, source, message, task_id, worker_id,
+         json.dumps(meta) if meta else None)
+    )
 
 async def init_db():
     os.makedirs(os.path.dirname(os.path.abspath(DB_PATH)), exist_ok=True)
@@ -74,6 +89,35 @@ async def init_db():
             partition_manifest  TEXT,
             is_final_drain      BOOLEAN DEFAULT FALSE,
             created_at          TEXT NOT NULL
+        );
+        """)
+
+        await db.execute("""
+        CREATE TABLE IF NOT EXISTS events (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts          TEXT NOT NULL,
+            job_id      TEXT,
+            kind        TEXT NOT NULL,
+            source      TEXT NOT NULL,
+            message     TEXT NOT NULL,
+            task_id     TEXT,
+            worker_id   TEXT,
+            meta        TEXT
+        );
+        """)
+
+        await db.execute("""
+        CREATE TABLE IF NOT EXISTS nodes (
+            container_id        TEXT PRIMARY KEY,
+            name                TEXT NOT NULL,
+            role                TEXT NOT NULL,
+            state               TEXT NOT NULL,
+            created_at          TEXT,
+            died_at             TEXT,
+            exit_code           INTEGER,
+            warned_at           TEXT,
+            crash_injected_at   TEXT,
+            cause               TEXT
         );
         """)
 

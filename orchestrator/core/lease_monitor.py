@@ -2,7 +2,7 @@ import asyncio
 import os
 import logging
 from datetime import datetime, timezone
-from orchestrator.core.database import get_db
+from orchestrator.core.database import get_db, emit
 from orchestrator.metrics import (
     MAPREDUCE_HEARTBEAT_TIMEOUTS_TOTAL,
     MAPREDUCE_CRASHES_TOTAL,
@@ -14,6 +14,7 @@ log = logging.getLogger("orchestrator.lease_monitor")
 
 LEASE_CHECK_INTERVAL_SECONDS = float(os.environ.get("LEASE_CHECK_INTERVAL_SECONDS", "1.0"))
 MAX_ATTEMPTS = int(os.environ.get("MAX_ATTEMPTS", "3"))
+HEARTBEAT_TIMEOUT_S = os.environ.get("HEARTBEAT_TIMEOUT_SECONDS", "5")
 
 async def lease_monitor_loop():
     """Continuously monitors tasks for worker heartbeat timeouts."""
@@ -54,7 +55,13 @@ async def check_expired_leases():
             MAPREDUCE_HEARTBEAT_TIMEOUTS_TOTAL.inc()
             MAPREDUCE_CRASHES_TOTAL.inc()
 
+            await emit(db, "LEASE_EXPIRED", "MASTER",
+                       f"Heartbeat lease expired for {task_id}: no heartbeat from {worker} for {HEARTBEAT_TIMEOUT_S}s, declaring it failed",
+                       job_id=job_id, task_id=task_id, worker_id=worker)
             if new_attempt < MAX_ATTEMPTS:
+                await emit(db, "TASK_REQUEUED", "MASTER",
+                           f"Task {task_id} requeued as attempt {new_attempt}; resumes from its last Redis/DB checkpoint",
+                           job_id=job_id, task_id=task_id, meta={"attempt": new_attempt})
                 await db.execute("""
                 UPDATE tasks
                 SET state = 'QUEUED',

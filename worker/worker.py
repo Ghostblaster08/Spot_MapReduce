@@ -2,6 +2,7 @@ import os
 import sys
 import time
 import uuid
+import socket
 import threading
 import logging
 import requests
@@ -64,7 +65,7 @@ def heartbeat_loop(worker_id: str, state_ref: dict, sentinel: PreemptionHandler)
         time.sleep(HEARTBEAT_INTERVAL_SECONDS)
 
 def main():
-    worker_id = f"{WORKER_ID_PREFIX}-{uuid.uuid4().hex[:8]}"
+    worker_id = f"{WORKER_ID_PREFIX}-{socket.gethostname()}-{uuid.uuid4().hex[:4]}"
     log.info(f"Starting Spot Worker ID: {worker_id}")
 
     sentinel = PreemptionHandler()

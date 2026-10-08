@@ -2,7 +2,7 @@ import asyncio
 import os
 import logging
 from datetime import datetime, timezone
-from orchestrator.core.database import get_db
+from orchestrator.core.database import get_db, emit
 from orchestrator.metrics import (
     MAPREDUCE_JOBS_TOTAL,
     MAPREDUCE_TASKS_QUEUED
@@ -67,6 +67,9 @@ async def check_stage_barriers():
                     ) VALUES (?, ?, 'REDUCE', 'QUEUED', ?, 0, ?)
                     """, (task_id, job_id, p, now_iso))
 
+                await emit(db, "STAGE_TRANSITION", "MASTER",
+                           f"Barrier reached: all MAP tasks done. Shuffle data is in RSS. Enqueued {num_reducers} REDUCE tasks",
+                           job_id=job_id)
                 await db.commit()
                 MAPREDUCE_TASKS_QUEUED.labels(task_type="REDUCE").inc(num_reducers)
                 log.info(f"Enqueued {num_reducers} REDUCE tasks for job {job_id}")
@@ -97,6 +100,8 @@ async def check_stage_barriers():
                 SET state = 'COMPLETED', completed_at = ?
                 WHERE job_id = ?
                 """, (now_iso, job_id))
+                await emit(db, "JOB_COMPLETED", "MASTER",
+                           "All REDUCE tasks done. Output partitions written; _SUCCESS marker created", job_id=job_id)
                 await db.commit()
 
                 # Write _SUCCESS marker file

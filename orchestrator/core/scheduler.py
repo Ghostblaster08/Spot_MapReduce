@@ -3,7 +3,7 @@ import uuid
 import logging
 from datetime import datetime, timezone, timedelta
 from typing import Optional, List, Dict, Any
-from orchestrator.core.database import get_db
+from orchestrator.core.database import get_db, emit
 from orchestrator.models.task import TaskResponse
 from orchestrator.metrics import (
     MAPREDUCE_TASKS_RUNNING,
@@ -72,6 +72,12 @@ async def create_job_and_map_tasks(
             ) VALUES (?, ?, 'MAP', 'QUEUED', ?, ?, 0, ?)
             """, (task_id, job_id, s_start, s_end, now))
 
+        await emit(db, "JOB_RECEIVED", "MASTER",
+                   f"Job '{name}' received: input {os.path.basename(input_path)} "
+                   f"({sum(e - s_ for s_, e in splits):,} bytes)", job_id=job_id)
+        await emit(db, "TASKS_CREATED", "MASTER",
+                   f"Scheduler split input into {len(splits)} byte-range MAP tasks ({num_reducers} REDUCE tasks follow after the barrier)",
+                   job_id=job_id)
         await db.commit()
         MAPREDUCE_TASKS_QUEUED.labels(task_type="MAP").inc(len(splits))
         log.info(f"Created job {job_id} with {len(splits)} MAP tasks")
@@ -122,6 +128,14 @@ async def poll_task(worker_id: str) -> Optional[TaskResponse]:
         MAPREDUCE_TASKS_QUEUED.labels(task_type=task_type).dec()
         MAPREDUCE_TASKS_RUNNING.labels(task_type=task_type).inc()
 
+        await emit(db, "TASK_ASSIGNED", "MASTER",
+                   f"Assigned {task_type} {task_id} (attempt {row['attempt_id']}) to {worker_id}"
+                   + (f", resuming from byte {row['last_checkpoint_offset']:,}" if (row["last_checkpoint_offset"] or 0) > (row["split_start"] or 0) else ""),
+                   job_id=row["job_id"], task_id=task_id, worker_id=worker_id,
+                   meta={"type": task_type, "attempt": row["attempt_id"],
+                         "resume_offset": row["last_checkpoint_offset"] or 0})
+        await db.commit()
+
         log.info(f"Assigned {task_type} task {task_id} (attempt {row['attempt_id']}) to {worker_id}")
 
         return TaskResponse(
@@ -154,7 +168,7 @@ async def mark_task_complete(
     try:
         now = utcnow_iso()
         cursor = await db.execute("""
-        SELECT task_type, state FROM tasks WHERE task_id = ? AND attempt_id = ?
+        SELECT task_type, state, job_id, assigned_worker FROM tasks WHERE task_id = ? AND attempt_id = ?
         """, (task_id, attempt_id))
         row = await cursor.fetchone()
         if not row or row["state"] != "RUNNING":
@@ -171,6 +185,9 @@ async def mark_task_complete(
             completed_at = ?
         WHERE task_id = ? AND attempt_id = ?
         """, (final_byte_offset, final_records_processed, now, task_id, attempt_id))
+        await emit(db, "TASK_COMPLETED", "WORKER",
+                   f"{task_type} {task_id} completed by {row['assigned_worker']}",
+                   job_id=row["job_id"], task_id=task_id, worker_id=row["assigned_worker"])
         await db.commit()
 
         MAPREDUCE_TASKS_RUNNING.labels(task_type=task_type).dec()
@@ -190,7 +207,7 @@ async def drain_and_requeue_task(
     db = await get_db()
     try:
         cursor = await db.execute("""
-        SELECT task_type, attempt_id FROM tasks WHERE task_id = ?
+        SELECT task_type, attempt_id, job_id, assigned_worker FROM tasks WHERE task_id = ?
         """, (task_id,))
         row = await cursor.fetchone()
         if not row:
@@ -198,6 +215,11 @@ async def drain_and_requeue_task(
 
         task_type = row["task_type"]
         new_attempt = row["attempt_id"] + 1
+        await emit(db, "DRAIN_RECEIVED", "WORKER",
+                   f"{row['assigned_worker']} intercepted the spot warning and drained {task_id}: "
+                   f"flushed to RSS, checkpointed at byte {final_byte_offset:,}",
+                   job_id=row["job_id"], task_id=task_id, worker_id=row["assigned_worker"],
+                   meta={"offset": final_byte_offset})
 
         await db.execute("""
         UPDATE tasks
@@ -209,6 +231,9 @@ async def drain_and_requeue_task(
             last_checkpoint_seq = ?
         WHERE task_id = ?
         """, (new_attempt, final_byte_offset, final_records_processed, task_id))
+        await emit(db, "TASK_REQUEUED", "MASTER",
+                   f"Task {task_id} requeued as attempt {new_attempt}; next free node resumes from byte {final_byte_offset:,}",
+                   job_id=row["job_id"], task_id=task_id, meta={"attempt": new_attempt, "offset": final_byte_offset})
         await db.commit()
 
         MAPREDUCE_TASKS_RUNNING.labels(task_type=task_type).dec()

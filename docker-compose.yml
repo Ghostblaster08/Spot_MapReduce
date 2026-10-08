@@ -23,11 +23,14 @@ services:
       - input-data:/data/input
       - output-data:/data/output
       - ./orchestrator:/app/orchestrator
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./job-client/jobs:/jobs_seed:ro
     environment:
       - DB_PATH=/data/orchestrator/state.db
       - HEARTBEAT_TIMEOUT_SECONDS=5
       - LEASE_CHECK_INTERVAL_SECONDS=1
       - RSS_URL=http://rss:8001
+      - REDIS_URL=redis://redis:6379/0
       - LOG_LEVEL=INFO
     networks:
       - mapreduce-net
@@ -84,7 +87,7 @@ services:
       context: ./worker
       dockerfile: Dockerfile
     deploy:
-      replicas: 4
+      replicas: 5
       restart_policy:
         condition: on-failure
         delay: 2s
@@ -146,7 +149,7 @@ services:
     image: grafana/grafana:10.4.2
     container_name: grafana
     ports:
-      - "3000:3000"
+      - "3030:3000"
     volumes:
       - ./monitoring/grafana/datasource.yml:/etc/grafana/provisioning/datasources/ds.yml:ro
       - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
