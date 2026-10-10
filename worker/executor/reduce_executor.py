@@ -1,4 +1,5 @@
 import os
+import time
 import itertools
 import importlib
 import logging
@@ -87,6 +88,7 @@ def run_reduce_task(
             values = [val for _, val in group]
             result = reduce_fn(key, values)
             out.write(f"{key}\t{result}\n")
+            time.sleep(0.005)
 
     os.replace(temp_file_path, out_file_path)
     log.info(f"Wrote partition output to {out_file_path}")

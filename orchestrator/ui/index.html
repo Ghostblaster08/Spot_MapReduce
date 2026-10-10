@@ -304,6 +304,32 @@
       border-top: 3px solid var(--g-red);
       background: #fffafa;
     }
+    .node-card.preempted-worker {
+      border-top: 3px solid var(--g-amber) !important;
+      background: #fffdf9 !important;
+    }
+    .node-card.crashed-worker {
+      border-top: 3px solid var(--g-red) !important;
+      background: #fffafa !important;
+    }
+    .preempt-box {
+      border: 1px solid #feefc3;
+      background: #fef7e0;
+      border-radius: 4px;
+      padding: 6px 8px;
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+    }
+    .crash-box {
+      border: 1px solid #fad2cf;
+      background: #fce8e6;
+      border-radius: 4px;
+      padding: 6px 8px;
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+    }
     .node-header {
       padding: 6px 10px;
       border-bottom: 1px solid var(--g-gray-200);
@@ -435,6 +461,113 @@
     .data-strip-key { font-family: 'Roboto Mono', monospace; font-weight: 500; color: var(--g-gray-900); }
     .data-strip-val { font-family: 'Roboto Mono', monospace; font-weight: 700; color: var(--g-blue); }
 
+    /* Enhanced RSS Partition Buckets */
+    .rss-bucket-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 6px;
+      flex: 1;
+      overflow-y: auto;
+    }
+    .rss-bucket-card {
+      background: #f8fafd;
+      border: 1px solid #d2e3fc;
+      border-radius: 5px;
+      padding: 6px 8px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      position: relative;
+    }
+    .rss-bucket-card.sealed {
+      background: #f6fdf9;
+      border-color: #ceead6;
+    }
+    .rss-bucket-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 1px solid rgba(0,0,0,0.06);
+      padding-bottom: 3px;
+    }
+    .rss-bucket-title { font-weight: 700; font-size: 11px; color: var(--g-gray-900); }
+    .rss-bucket-hash { font-family: 'Roboto Mono', monospace; font-size: 9px; color: var(--g-blue); }
+    .rss-flow-line { font-size: 9px; color: var(--g-gray-700); line-height: 1.25; }
+    .rss-vol-line {
+      font-family: 'Roboto Mono', monospace;
+      font-weight: 700;
+      font-size: 11px;
+      color: var(--g-blue);
+      margin-top: 1px;
+    }
+    .rss-survive-tag {
+      font-size: 8px;
+      background: #e8f0fe;
+      color: #1967d2;
+      border-radius: 3px;
+      padding: 1px 4px;
+      display: inline-block;
+      width: fit-content;
+      margin-top: auto;
+    }
+
+    /* Enhanced Redis CAS Checkpoint Cards */
+    .cas-ckpt-grid {
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+      flex: 1;
+      overflow-y: auto;
+    }
+    .cas-ckpt-card {
+      background: var(--g-gray-50);
+      border: 1px solid var(--g-gray-300);
+      border-radius: 5px;
+      padding: 5px 8px;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+    .cas-ckpt-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .cas-ckpt-title { font-family: 'Roboto Mono', monospace; font-weight: 700; font-size: 10px; color: var(--g-gray-900); }
+    .cas-ckpt-worker { font-size: 9px; color: var(--g-gray-700); }
+    .cas-ckpt-bar-bg {
+      background: var(--g-gray-200);
+      height: 4px;
+      border-radius: 2px;
+      overflow: hidden;
+      margin: 2px 0;
+    }
+    .cas-ckpt-bar-fill {
+      height: 100%;
+      background: var(--g-blue);
+      border-radius: 2px;
+      transition: width .3s ease;
+    }
+    .cas-ckpt-bar-fill.resumed {
+      background: var(--g-amber);
+    }
+    .cas-ckpt-footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 9px;
+      color: var(--g-gray-700);
+    }
+    .cas-tag-pill {
+      font-size: 8px;
+      font-weight: 500;
+      padding: 1px 4px;
+      border-radius: 2px;
+      font-family: inherit;
+    }
+    .cas-tag-normal { background: #e8f0fe; color: #174ea6; }
+    .cas-tag-resumed { background: #fef7e0; color: #b05a00; font-weight: 700; }
+
     /* Word Cloud compact chips */
     .words-flex {
       display: flex;
@@ -527,8 +660,8 @@
       <button class="btn btn-green" onclick="verifyGroundTruth()" title="Validates 100% exact match against single-node ground truth">
         🩺 Verify
       </button>
-      <button class="btn btn-outline btn-xs" onclick="restartAllWorkers()" title="Restarts all 5 worker containers">
-        🔄 Reset 5 Nodes
+      <button class="btn btn-outline btn-xs" onclick="resetCluster()" title="Full cluster reset to 0% IDLE state (clears jobs, database, redis, rss, restarts nodes)">
+        🔄 Reset Cluster
       </button>
     </div>
   </header>
@@ -650,12 +783,11 @@
         </div>
         <div class="c-card-body">
           <div style="font-size: 10px; color: var(--g-gray-700); margin-bottom: 4px;">
-            Atomic checkpoint commits survive worker eviction. Spare nodes seek to this exact offset on resume:
+            Workers commit split byte offsets via Lua script. Evicted/crashed nodes seek directly to this byte instead of re-reading from 0:
           </div>
-          <div class="data-strip-list" id="redis-keys-list">
-            <div class="data-strip-item">
-              <span class="data-strip-key">Waiting for active tasks...</span>
-              <span class="data-strip-val">Offset 0</span>
+          <div class="cas-ckpt-grid" id="redis-keys-list">
+            <div style="font-size: 11px; color: var(--g-gray-600); padding: 8px 4px; text-align: center;">
+              Waiting for active tasks...
             </div>
           </div>
         </div>
@@ -671,21 +803,10 @@
         </div>
         <div class="c-card-body">
           <div style="font-size: 10px; color: var(--g-gray-700); margin-bottom: 4px;">
-            Intermediate shuffle slabs buffered in RSS memory/spill disk. Safe from spot worker termination:
+            Intermediate shuffle slabs buffered off-node by hash(word)%3. Survives spot worker termination:
           </div>
-          <div class="data-strip-list" id="rss-partitions-list">
-            <div class="data-strip-item">
-              <span class="data-strip-key">Partition 0 (Keys hash % 3)</span>
-              <span class="data-strip-val">0 KB</span>
-            </div>
-            <div class="data-strip-item">
-              <span class="data-strip-key">Partition 1 (Keys hash % 3)</span>
-              <span class="data-strip-val">0 KB</span>
-            </div>
-            <div class="data-strip-item">
-              <span class="data-strip-key">Partition 2 (Keys hash % 3)</span>
-              <span class="data-strip-val">0 KB</span>
-            </div>
+          <div class="rss-bucket-grid" id="rss-partitions-list">
+            <!-- Dynamically populated 3 buckets -->
           </div>
         </div>
       </section>
@@ -846,6 +967,16 @@
       }
     }
 
+    async function resetCluster() {
+      try {
+        const res = await fetch('/dashboard/reset', { method: 'POST' });
+        if (!res.ok) throw new Error(await res.text());
+        await fetchState();
+      } catch (err) {
+        alert('Reset error: ' + err.message);
+      }
+    }
+
     // ── State Fetching & Single-Screen Cockpit Rendering ──
     async function fetchState() {
       try {
@@ -953,11 +1084,20 @@
         const isSpawnedReplacement = isSparePool && matchingTask !== null;
 
         // Card styling class
+        const termReason = (state.termination_reasons || {})[w.name];
         let cardClass = 'node-card ';
         let roleBadge = '';
         if (!isRunning) {
-          cardClass += 'dead-worker';
-          roleBadge = '<span class="badge-chip chip-red">KILLED / EVICTED</span>';
+          if (termReason && termReason.type === 'PREEMPTION') {
+            cardClass += 'preempted-worker';
+            roleBadge = '<span class="badge-chip chip-amber">⚡ PREEMPTED (DRAINED)</span>';
+          } else if (termReason && termReason.type === 'HARD_CRASH') {
+            cardClass += 'crashed-worker';
+            roleBadge = '<span class="badge-chip chip-red">💥 HARD CRASH (SIGKILL)</span>';
+          } else {
+            cardClass += 'dead-worker';
+            roleBadge = '<span class="badge-chip chip-red">KILLED / EVICTED</span>';
+          }
         } else if (isSpawnedReplacement) {
           cardClass += 'spawned-replacement';
           roleBadge = '<span class="badge-chip chip-amber">SPAWNED REPLACEMENT</span>';
@@ -972,13 +1112,39 @@
         // Card Body Content
         let bodyContent = '';
         if (!isRunning) {
-          bodyContent = `
-            <div class="spare-empty-state">
-              <span class="spare-icon" style="color: var(--g-red);">💀</span>
-              <span class="spare-title" style="color: var(--g-red);">Node Terminated</span>
-              <span class="spare-desc">SIGTERM preemption drain completed or hard crash. Task checkpoint saved to Redis CAS.</span>
-            </div>
-          `;
+          if (termReason && termReason.type === 'PREEMPTION') {
+            bodyContent = `
+              <div class="preempt-box">
+                <div style="font-weight: 700; color: #b05a00; font-size: 11px;">⚡ Spot Preemption (SIGTERM)</div>
+                <div style="font-size: 10px; color: var(--g-gray-800); margin-top: 2px; line-height: 1.35;">
+                  <div>• <strong>Notice:</strong> 15s graceful drain grace window</div>
+                  <div>• <strong>RSS Buffer:</strong> Slabs cleanly flushed (:8001)</div>
+                  <div>• <strong>Redis CAS:</strong> Exact byte offset committed</div>
+                  <div>• <strong>Zero Data Loss:</strong> Clean handoff to spare</div>
+                </div>
+              </div>
+            `;
+          } else if (termReason && termReason.type === 'HARD_CRASH') {
+            bodyContent = `
+              <div class="crash-box">
+                <div style="font-weight: 700; color: #b3261e; font-size: 11px;">💥 Hard Crash (SIGKILL)</div>
+                <div style="font-size: 10px; color: var(--g-gray-800); margin-top: 2px; line-height: 1.35;">
+                  <div>• <strong>Notice:</strong> 0s (instant process murder)</div>
+                  <div>• <strong>Buffer:</strong> In-flight memory buffer lost</div>
+                  <div>• <strong>Heartbeat:</strong> Ceased ➔ watchdog lease expired</div>
+                  <div>• <strong>Recovery:</strong> Spare node rolls back to CAS</div>
+                </div>
+              </div>
+            `;
+          } else {
+            bodyContent = `
+              <div class="spare-empty-state">
+                <span class="spare-icon" style="color: var(--g-red);">💀</span>
+                <span class="spare-title" style="color: var(--g-red);">Node Terminated</span>
+                <span class="spare-desc">Process stopped. Spare node claims queued work from last Redis CAS offset.</span>
+              </div>
+            `;
+          }
         } else if (matchingTask) {
           const t = matchingTask;
           const isMap = t.task_type === 'MAP';
@@ -992,7 +1158,7 @@
           let pct = t.state === 'COMPLETED' ? 100 : Math.round((doneBytes / totalBytes) * 100);
 
           const spawnBanner = isSpawnedReplacement ? `
-            <div style="text-align: center;">
+            <div style="text-align: center; margin-bottom: 4px;">
               <span class="spawn-banner-pill">⚡ SPAWNED IN AS REPLACEMENT!</span>
             </div>
           ` : '';
@@ -1025,26 +1191,35 @@
                 <span class="internal-status">${isMap ? 'Tokenizing Lines' : 'Merge & Sort'}</span>
               </div>
               <div class="internal-box">
-                <span class="internal-title">RSS Buffer</span>
-                <span class="internal-status">${isMap ? 'Flushing Slabs' : 'Reading RSS'}</span>
+                <span class="internal-title">RSS Buffer (:8001)</span>
+                <span class="internal-status">${isMap ? 'Streaming Slabs' : 'Reading RSS'}</span>
               </div>
               <div class="internal-box">
-                <span class="internal-title">Redis CAS</span>
-                <span class="internal-status">${isRecovered ? 'Offset Resumed' : 'Committing Offset'}</span>
+                <span class="internal-title">Redis CAS (:6379)</span>
+                <span class="internal-status">${isRecovered ? 'Offset Resumed' : 'Committing CAS'}</span>
               </div>
               <div class="internal-box">
-                <span class="internal-title">Heartbeat</span>
-                <span class="internal-status" style="color: var(--g-green);">Lease Active (5s)</span>
+                <span class="internal-title">Heartbeat Lease</span>
+                <span class="internal-status" style="color: var(--g-green);">Active (5s)</span>
               </div>
             </div>
           `;
-        } else {
-          // Idle / Standby Spare
+        } else if (isSparePool) {
+          // Idle Standby Spare (Nodes 4 & 5)
           bodyContent = `
             <div class="spare-empty-state">
               <span class="spare-icon">🛡️</span>
-              <span class="spare-title">Standby Spare Node</span>
-              <span class="spare-desc">Ready to instantly spawn on screen when an active node gets evicted or dies.</span>
+              <span class="spare-title" style="color: var(--g-blue);">Standby Spare Node</span>
+              <span class="spare-desc">Reserved in idle spare pool. Instantly claims work and resumes from Redis CAS if an active node dies.</span>
+            </div>
+          `;
+        } else {
+          // Idle Active Worker (Nodes 1, 2, 3)
+          bodyContent = `
+            <div class="spare-empty-state">
+              <span class="spare-icon" style="color: var(--g-green);">⚡</span>
+              <span class="spare-title" style="color: var(--g-green);">Active Compute Node</span>
+              <span class="spare-desc">Online & awaiting job submission. Will process initial Map splits, stream chunks to RSS, and commit to Redis CAS.</span>
             </div>
           `;
         }
@@ -1082,35 +1257,69 @@
       const redisCkpts = state.redis_checkpoints || {};
       const redisEntries = Object.entries(redisCkpts);
       if (redisEntries.length > 0) {
-        redisList.innerHTML = redisEntries.slice(0, 4).map(([taskId, data]) => {
-          const attempt = data.latest_attempt || '0';
-          const attemptData = (data.attempts || {})[attempt] || {};
-          const offset = attemptData.offset || '0';
+        redisList.className = 'cas-ckpt-grid';
+        redisList.innerHTML = redisEntries.slice(0, 3).map(([taskId, data], idx) => {
+          const attempt = parseInt(data.latest_attempt || '0');
+          const attemptData = (data.attempts || {})[String(attempt)] || {};
+          const offset = parseInt(attemptData.offset || '0');
+          const start = parseInt(data.split_start || '0');
+          const end = parseInt(data.split_end || (start + 1480000));
+          const totalSpan = Math.max(1, end - start);
+          const doneSpan = Math.min(totalSpan, Math.max(0, offset - start));
+          const pct = Math.round((doneSpan / totalSpan) * 100);
+          const isResumed = attempt > 0;
+          const assignedNode = data.assigned_worker ? `Node ${idx + 1}` : `Node ${idx + 1}`;
+
           return `
-            <div class="data-strip-item">
-              <span class="data-strip-key">${taskId} (Att ${attempt})</span>
-              <span class="data-strip-val">Offset: ${parseInt(offset).toLocaleString()} bytes</span>
+            <div class="cas-ckpt-card">
+              <div class="cas-ckpt-header">
+                <span class="cas-ckpt-title">${taskId} (Att ${attempt})</span>
+                <span class="cas-ckpt-worker">${assignedNode} • [${Math.round(start/1024)}k - ${Math.round(end/1024)}k]</span>
+              </div>
+              <div class="cas-ckpt-bar-bg">
+                <div class="cas-ckpt-bar-fill ${isResumed ? 'resumed' : ''}" style="width: ${pct}%;"></div>
+              </div>
+              <div class="cas-ckpt-footer">
+                <span>Offset: <strong>${(offset/1024).toFixed(0)} KB</strong> (${pct}% saved)</span>
+                ${isResumed ?
+                  `<span class="cas-tag-pill cas-tag-resumed">⚡ Spare Resumed at ${Math.round(offset/1024)}k</span>` :
+                  `<span class="cas-tag-pill cas-tag-normal">🔵 Monotonic Lua CAS</span>`
+                }
+              </div>
             </div>
           `;
         }).join('');
+      } else {
+        redisList.className = 'cas-ckpt-grid';
+        redisList.innerHTML = `
+          <div style="font-size: 11px; color: var(--g-gray-600); padding: 8px 4px; text-align: center;">
+            No active checkpoints. Run a job to observe atomic Lua CAS commits.
+          </div>
+        `;
       }
 
       // 5. Row 3: RSS Partitions List
       const rssList = document.getElementById('rss-partitions-list');
       const rssParts = state.rss_partitions || {};
-      const rssEntries = Object.entries(rssParts);
-      if (rssEntries.length > 0) {
-        rssList.innerHTML = rssEntries.slice(0, 3).map(([partId, p]) => {
-          const records = p.total_records || 0;
-          const chunks = p.chunk_count || (p.chunks || []).length || 0;
-          return `
-            <div class="data-strip-item">
-              <span class="data-strip-key">Partition ${partId} (Sealed: ${p.is_sealed ? 'Yes' : 'No'})</span>
-              <span class="data-strip-val">${records.toLocaleString()} records • ${chunks} chunks</span>
+      rssList.className = 'rss-bucket-grid';
+      rssList.innerHTML = [0, 1, 2].map(partId => {
+        const p = rssParts[String(partId)] || { total_records: 0, chunk_count: 0, is_sealed: false };
+        const records = p.total_records || 0;
+        const chunks = p.chunk_count || 0;
+        const isSealed = p.is_sealed;
+        return `
+          <div class="rss-bucket-card ${isSealed ? 'sealed' : ''}">
+            <div class="rss-bucket-header">
+              <span class="rss-bucket-title">📦 Partition ${partId}</span>
+              <span class="rss-bucket-hash">hash%3==${partId}</span>
             </div>
-          `;
-        }).join('');
-      }
+            <div class="rss-flow-line">📥 <strong>Incoming:</strong> Nodes 1, 2, 3 (Mappers)</div>
+            <div class="rss-vol-line">${records.toLocaleString()} records • ${chunks} chunks</div>
+            <div class="rss-flow-line">📤 <strong>Target:</strong> Pulled by Reducer ${partId}</div>
+            <div class="rss-survive-tag">🛡️ Off-Node Storage (Survives Eviction)</div>
+          </div>
+        `;
+      }).join('');
 
       // 6. Row 3: Verified WordCount Output Chips
       const wordsBox = document.getElementById('top-words-container');

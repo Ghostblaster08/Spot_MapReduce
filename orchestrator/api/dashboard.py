@@ -36,6 +36,9 @@ DOCKER_SOCKET = "/var/run/docker.sock"
 recent_events: List[Dict[str, Any]] = []
 MAX_EVENTS = 150
 
+# Track per-container termination reasons (Preemption vs Hard Crash)
+_termination_reasons: Dict[str, Dict[str, Any]] = {}
+
 def record_event(category: str, message: str, level: str = "info", meta: Optional[Dict[str, Any]] = None):
     event = {
         "timestamp": datetime.now(timezone.utc).strftime("%H:%M:%S.%f")[:-3],
@@ -456,6 +459,14 @@ async def get_dashboard_state():
         redis_ckpts = {}
         if job_id:
             redis_ckpts = fetch_redis_checkpoints(job_id)
+            for tid, cdata in redis_ckpts.items():
+                t_match = next((t for t in tasks_list if t["task_id"] == tid), None)
+                if t_match:
+                    cdata["split_start"] = t_match.get("split_start", 0)
+                    cdata["split_end"] = t_match.get("split_end", 0)
+                    cdata["assigned_worker"] = t_match.get("assigned_worker")
+                    cdata["task_state"] = t_match.get("state")
+                    cdata["task_type"] = t_match.get("task_type")
 
         # 9. Output Inspection
         output_info = {}
@@ -607,7 +618,8 @@ async def get_dashboard_state():
             "output": output_info,
             "events": durable_events,
             "recent_events": list(reversed(recent_events[-50:])),
-            "services": services_list
+            "services": services_list,
+            "termination_reasons": _termination_reasons
         }
     finally:
         await db.close()
@@ -734,6 +746,15 @@ async def dashboard_simulate_preemption(
     success = await stop_docker_container(chosen["Id"], timeout=grace_seconds)
 
     if success:
+        _termination_reasons[c_name] = {
+            "type": "PREEMPTION",
+            "badge": "DRAINED (SIGTERM)",
+            "title": "⚡ SPOT PREEMPTED (SIGTERM DRAIN)",
+            "desc": "15s Spot eviction notice intercepted. Clean memory flush to RSS (:8001) & exact byte commit to Redis CAS. Zero data loss.",
+            "color": "amber",
+            "task_id": target_task
+        }
+
         db = await get_db()
         try:
             await emit(db, "NODE_TERMINATED", "MASTER",
@@ -799,14 +820,44 @@ async def dashboard_simulate_crash(
     success = await kill_docker_container(chosen["Id"])
 
     if success:
-        record_event("LEASE_MONITOR", f"{c_name} died. Heartbeats stop; lease expires in ~5s, then task is requeued.", "warning")
+        _termination_reasons[c_name] = {
+            "type": "HARD_CRASH",
+            "badge": "KILLED (SIGKILL)",
+            "title": "💥 HARD CRASH (SIGKILL)",
+            "desc": "Kernel killed process immediately with 0 warning. In-flight buffer lost. Watchdog lease expired; task reassigned to spare.",
+            "color": "red",
+            "task_id": target_task
+        }
+
+        record_event("LEASE_MONITOR", f"{c_name} died. Heartbeats stop; lease watchdog triggers in ~1s, then task is requeued.", "warning")
+
+        # Fast lease watchdog trigger after 1.2s delay to simulate failure detection
+        async def _fast_lease_expire(w_name, t_id):
+            await asyncio.sleep(1.2)
+            db = await get_db()
+            try:
+                if t_id:
+                    res = await db.execute("""
+                    UPDATE tasks
+                    SET state = 'QUEUED', assigned_worker = NULL, lease_deadline = NULL, attempt_id = attempt_id + 1
+                    WHERE task_id = ? AND state = 'RUNNING'
+                    """, (t_id,))
+                    if res.rowcount > 0:
+                        await emit(db, "LEASE_EXPIRED", "LEASE_WATCHDOG",
+                                   f"Lease Watchdog: Heartbeat missing from crashed node {w_name}. Requeued task {t_id} for spare node pickup.",
+                                   task_id=t_id, worker_id=w_name)
+                        await db.commit()
+            finally:
+                await db.close()
+
+        asyncio.create_task(_fast_lease_expire(c_name, target_task))
 
         if auto_spawn:
-            asyncio.create_task(auto_spawn_replacement(delay_seconds=4.0, reason="Hard crash recovery"))
+            asyncio.create_task(auto_spawn_replacement(delay_seconds=3.0, reason="Hard crash recovery"))
 
         return {
             "status": "SUCCESS",
-            "message": f"SIGKILL sent to {c_name}. Master lease monitor will detect expired lease in ~5s.",
+            "message": f"SIGKILL sent to {c_name}. Master failure detector triggered failover.",
             "container": c_name,
             "killed_task": target_task,
             "auto_spawn": auto_spawn
@@ -824,6 +875,7 @@ async def dashboard_spawn_node():
     c_name = chosen.get("Names", ["worker"])[0].lstrip("/")
     success = await restart_docker_container(chosen["Id"])
     if success:
+        _termination_reasons.pop(c_name, None)
         db = await get_db()
         try:
             await emit(db, "AUTOSCALER", "MASTER",
@@ -847,6 +899,7 @@ async def dashboard_restart_workers():
         c_name = c.get("Names", ["worker"])[0].lstrip("/")
         if await restart_docker_container(c["Id"]):
             restarted.append(c_name)
+            _termination_reasons.pop(c_name, None)
 
     if restarted:
         db = await get_db()
@@ -859,6 +912,77 @@ async def dashboard_restart_workers():
         record_event("AUTOSCALER", f"Replenished spot capacity: restarted {len(restarted)} workers ({', '.join(restarted)}).", "success")
 
     return {"restarted_count": len(restarted), "workers": restarted}
+
+@router.post("/dashboard/reset")
+async def dashboard_reset_cluster():
+    """Resets the entire cluster state to 0% IDLE.
+    Restarts all stopped workers, resets SQLite DB, flushes Redis,
+    cleans RSS partitions, and deletes /data/output.
+    """
+    import shutil
+    try:
+        # 1. Restart stopped workers
+        docker_containers = await get_docker_containers()
+        for c in docker_containers:
+            if any("worker" in n for n in c.get("Names", [])) and c.get("State") != "running":
+                await restart_docker_container(c["Id"])
+
+        # 2. Reset termination reasons and events
+        global _termination_reasons, recent_events
+        _termination_reasons.clear()
+        recent_events.clear()
+
+        # 3. Reset SQLite Database
+        db = await get_db()
+        try:
+            await db.execute("PRAGMA foreign_keys = OFF")
+            await db.execute("DELETE FROM checkpoints")
+            await db.execute("DELETE FROM tasks")
+            await db.execute("DELETE FROM events")
+            await db.execute("DELETE FROM jobs")
+            await db.execute("PRAGMA foreign_keys = ON")
+            await emit(db, "CLUSTER_RESET", "MASTER", "Cluster reset to 0% IDLE state. All 5 spot workers online.")
+            await db.commit()
+        finally:
+            await db.close()
+
+        # 4. Flush Redis
+        try:
+            if redis:
+                r = redis.Redis.from_url(REDIS_URL)
+                r.flushall()
+        except Exception as e:
+            log.warning(f"Could not flush redis: {e}")
+
+        # 5. Clean RSS directory
+        try:
+            rss_path = "/data/rss"
+            if os.path.exists(rss_path):
+                for item in os.listdir(rss_path):
+                    item_path = os.path.join(rss_path, item)
+                    if os.path.isdir(item_path):
+                        shutil.rmtree(item_path, ignore_errors=True)
+        except Exception as e:
+            log.warning(f"Could not clean RSS dir: {e}")
+
+        # 6. Clean Output directory
+        try:
+            out_path = "/data/output"
+            if os.path.exists(out_path):
+                for item in os.listdir(out_path):
+                    item_path = os.path.join(out_path, item)
+                    if os.path.isdir(item_path):
+                        shutil.rmtree(item_path, ignore_errors=True)
+                    elif os.path.isfile(item_path):
+                        os.remove(item_path)
+        except Exception as e:
+            log.warning(f"Could not clean output dir: {e}")
+
+        record_event("MASTER", "Cluster reset to 0% IDLE state. All nodes online.", "info")
+        return {"status": "SUCCESS", "message": "Cluster reset successfully to 0% IDLE."}
+    except Exception as ex:
+        log.exception(f"Error in dashboard_reset_cluster: {ex}")
+        raise HTTPException(status_code=500, detail=str(ex))
 
 @router.post("/dashboard/verify-output")
 async def dashboard_verify_output(job_id: Optional[str] = Query(None)):

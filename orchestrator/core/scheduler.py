@@ -86,21 +86,86 @@ async def create_job_and_map_tasks(
 
     return job_id
 
+DOCKER_SOCKET = "/var/run/docker.sock"
+_SPARE_CONTAINER_IDS = set()
+_ACTIVE_CONTAINER_IDS = set()
+_LAST_ROLE_REFRESH = 0.0
+
+async def _get_worker_role(worker_id: str) -> str:
+    """Identifies whether a worker is in the active pool (Nodes 1-3) or standby spare pool (Nodes 4-5)."""
+    global _SPARE_CONTAINER_IDS, _ACTIVE_CONTAINER_IDS, _LAST_ROLE_REFRESH
+    import time
+    now = time.time()
+    if now - _LAST_ROLE_REFRESH > 5.0 or not _ACTIVE_CONTAINER_IDS or not _SPARE_CONTAINER_IDS:
+        try:
+            import httpx
+            if os.path.exists(DOCKER_SOCKET):
+                transport = httpx.AsyncHTTPTransport(uds=DOCKER_SOCKET)
+                async with httpx.AsyncClient(transport=transport, base_url="http://docker", timeout=2.0) as client:
+                    resp = await client.get("/containers/json?all=1")
+                    if resp.status_code == 200:
+                        spare_ids = set()
+                        active_ids = set()
+                        for c in resp.json():
+                            cid = c.get("Id", "")[:12]
+                            for n in c.get("Names", []):
+                                if any(n.endswith(f"worker-{x}") for x in (4, 5)):
+                                    spare_ids.add(cid)
+                                elif any(n.endswith(f"worker-{x}") for x in (1, 2, 3)):
+                                    active_ids.add(cid)
+                        if spare_ids:
+                            _SPARE_CONTAINER_IDS = spare_ids
+                        if active_ids:
+                            _ACTIVE_CONTAINER_IDS = active_ids
+                        _LAST_ROLE_REFRESH = now
+        except Exception as ex:
+            log.warning(f"Error querying docker socket for worker roles: {ex}")
+
+    # Extract container hostname from worker_id: worker-{cid}-{uuid}
+    parts = worker_id.split("-")
+    target_cid = parts[1] if len(parts) >= 2 else worker_id
+
+    for sid in _SPARE_CONTAINER_IDS:
+        if sid.startswith(target_cid) or target_cid.startswith(sid):
+            return "spare"
+    return "active"
+
 async def poll_task(worker_id: str) -> Optional[TaskResponse]:
-    """Atomically assign an available QUEUED task to worker."""
+    """Atomically assign an available QUEUED task to worker.
+    
+    Active workers (Nodes 1-3) process initial map tasks (attempt 0).
+    Standby spare workers (Nodes 4-5) only claim evicted tasks (attempt > 0)
+    or assist in the reduce merge phase.
+    """
+    role = await _get_worker_role(worker_id)
+    is_spare = (role == "spare")
+
     db = await get_db()
     try:
         # Check active jobs first
-        cursor = await db.execute("""
-        SELECT t.task_id, t.job_id, t.task_type, t.attempt_id, t.split_start, t.split_end,
-               t.partition_id, t.last_checkpoint_offset, t.last_checkpoint_seq,
-               j.map_fn, j.reduce_fn, j.input_path, j.output_path, j.num_reducers
-        FROM tasks t
-        JOIN jobs j ON t.job_id = j.job_id
-        WHERE t.state = 'QUEUED' AND j.state IN ('MAP_RUNNING', 'REDUCE_RUNNING')
-        ORDER BY CASE WHEN t.task_type = 'MAP' THEN 1 ELSE 2 END, t.created_at ASC
-        LIMIT 1
-        """)
+        if is_spare:
+            cursor = await db.execute("""
+            SELECT t.task_id, t.job_id, t.task_type, t.attempt_id, t.split_start, t.split_end,
+                   t.partition_id, t.last_checkpoint_offset, t.last_checkpoint_seq,
+                   j.map_fn, j.reduce_fn, j.input_path, j.output_path, j.num_reducers
+            FROM tasks t
+            JOIN jobs j ON t.job_id = j.job_id
+            WHERE t.state = 'QUEUED' AND j.state IN ('MAP_RUNNING', 'REDUCE_RUNNING')
+              AND (t.attempt_id > 0 OR t.task_type = 'REDUCE')
+            ORDER BY CASE WHEN t.task_type = 'MAP' THEN 1 ELSE 2 END, t.attempt_id DESC, t.created_at ASC
+            LIMIT 1
+            """)
+        else:
+            cursor = await db.execute("""
+            SELECT t.task_id, t.job_id, t.task_type, t.attempt_id, t.split_start, t.split_end,
+                   t.partition_id, t.last_checkpoint_offset, t.last_checkpoint_seq,
+                   j.map_fn, j.reduce_fn, j.input_path, j.output_path, j.num_reducers
+            FROM tasks t
+            JOIN jobs j ON t.job_id = j.job_id
+            WHERE t.state = 'QUEUED' AND j.state IN ('MAP_RUNNING', 'REDUCE_RUNNING')
+            ORDER BY CASE WHEN t.task_type = 'MAP' THEN 1 ELSE 2 END, t.created_at ASC
+            LIMIT 1
+            """)
         row = await cursor.fetchone()
         if not row:
             return None
@@ -128,15 +193,23 @@ async def poll_task(worker_id: str) -> Optional[TaskResponse]:
         MAPREDUCE_TASKS_QUEUED.labels(task_type=task_type).dec()
         MAPREDUCE_TASKS_RUNNING.labels(task_type=task_type).inc()
 
-        await emit(db, "TASK_ASSIGNED", "MASTER",
-                   f"Assigned {task_type} {task_id} (attempt {row['attempt_id']}) to {worker_id}"
-                   + (f", resuming from byte {row['last_checkpoint_offset']:,}" if (row["last_checkpoint_offset"] or 0) > (row["split_start"] or 0) else ""),
-                   job_id=row["job_id"], task_id=task_id, worker_id=worker_id,
-                   meta={"type": task_type, "attempt": row["attempt_id"],
-                         "resume_offset": row["last_checkpoint_offset"] or 0})
+        if is_spare:
+            await emit(db, "SPARE_SPAWNED", "AUTOSCALER",
+                       f"Standby Spare {worker_id} SPAWNED IN as replacement for {task_type} {task_id} (attempt {row['attempt_id']})"
+                       + (f", resuming from Redis CAS byte {row['last_checkpoint_offset']:,}" if (row["last_checkpoint_offset"] or 0) > (row["split_start"] or 0) else ""),
+                       job_id=row["job_id"], task_id=task_id, worker_id=worker_id,
+                       meta={"type": task_type, "attempt": row["attempt_id"],
+                             "resume_offset": row["last_checkpoint_offset"] or 0, "is_spare": True})
+        else:
+            await emit(db, "TASK_ASSIGNED", "MASTER",
+                       f"Assigned {task_type} {task_id} (attempt {row['attempt_id']}) to {worker_id}"
+                       + (f", resuming from byte {row['last_checkpoint_offset']:,}" if (row["last_checkpoint_offset"] or 0) > (row["split_start"] or 0) else ""),
+                       job_id=row["job_id"], task_id=task_id, worker_id=worker_id,
+                       meta={"type": task_type, "attempt": row["attempt_id"],
+                             "resume_offset": row["last_checkpoint_offset"] or 0})
         await db.commit()
 
-        log.info(f"Assigned {task_type} task {task_id} (attempt {row['attempt_id']}) to {worker_id}")
+        log.info(f"Assigned {task_type} task {task_id} (attempt {row['attempt_id']}, spare={is_spare}) to {worker_id}")
 
         return TaskResponse(
             task_id=task_id,

@@ -197,6 +197,10 @@ def run_map_task(
             state_ref["records_processed"] = records_processed
             state_ref["last_byte_offset"] = byte_pos
 
+            # Visual pacing for live demo visibility (~4-5s per split)
+            if records_processed % 100 == 0:
+                time.sleep(0.012)
+
             # Checkpoint boundary
             now = time.monotonic()
             if (now - last_ckpt_time >= CHECKPOINT_INTERVAL_SECONDS) or (records_processed - last_ckpt_records >= CHECKPOINT_N_RECORDS):
