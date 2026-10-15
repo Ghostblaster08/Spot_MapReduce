@@ -1027,3 +1027,13 @@ async def serve_ui():
         with open(UI_FILE_PATH, "r", encoding="utf-8") as f:
             return HTMLResponse(content=f.read())
     return HTMLResponse(content="<h1>Dashboard UI file not found</h1>", status_code=404)
+
+FLOW_FILE_PATH = os.path.join(os.path.dirname(__file__), "..", "ui", "flow.html")
+
+@router.get("/flow", response_class=HTMLResponse)
+async def serve_flow():
+    """Serves the node-graph flow view (pan/zoom canvas with live component stats)."""
+    if os.path.exists(FLOW_FILE_PATH):
+        with open(FLOW_FILE_PATH, "r", encoding="utf-8") as f:
+            return HTMLResponse(content=f.read())
+    return HTMLResponse(content="<h1>Flow UI file not found</h1>", status_code=404)
