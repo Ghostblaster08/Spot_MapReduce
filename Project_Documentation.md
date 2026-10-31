@@ -60,10 +60,19 @@ The framework is targeted at **large-scale batch processing, extract-transform-l
 
 | Domain | Example Workload | Primary Characteristic | Fault Sensitivity in Standard Systems |
 | :--- | :--- | :--- | :--- |
+| **Historical Financial Analytics** | High-volume market tick analysis, daily volume, VWAP, price stats | Batch record parsing, multi-metric key aggregation | High: Long aggregations over tick files fail if workers die |
 | **Log Analysis & Aggregation** | Web access logs, telemetry parsing | High-volume map, light reduce | Moderate: Map task re-runs lose progress |
 | **Sorting & Indexing** | TeraSort, Inverted Index | Massive all-to-all shuffle data | **Extreme:** Loss of local shuffle disk wipes out days of work |
 | **Graph Analytics** | PageRank, Connected Components | Iterative MapReduce passes | **Extreme:** Cascade failure across iterations |
 | **Data Warehousing / BI** | TPC-DS query benchmarks, joins | Heavy filter, hash joins | High: Reducer death wastes long aggregation work |
+
+#### Application Feature: Historical Financial Data Analytics
+The reference application implemented in the framework is **Historical Financial Data Analytics**:
+- **Problem Statement**: Process multi-gigabyte historical market-data feeds across stock tickers to compute daily trading volume, trade counts, Volume-Weighted Average Price (VWAP: $\frac{\sum P \times V}{\sum V}$), arithmetic mean execution price, and execution price extremes $[P_{\min}, P_{\max}]$.
+- **Map Phase** (`worker.jobs.financial_analytics.map_fn`): Parses structured trade records `timestamp,symbol,price,volume` and emits `(symbol, [price, volume])`.
+- **Shuffle Phase**: Partitions emitted tuples across reducers by `hash(symbol) % num_reducers`, pushed directly into the Remote Shuffle Service (RSS).
+- **Reduce Phase** (`worker.jobs.financial_analytics.reduce_fn`): Receives grouped symbol records and computes exact volume, trade counts, VWAP, average price, and price boundaries.
+- **Spot Suitability**: Historical financial analysis is naturally partitioned into independent byte ranges and time slices. When spot nodes are reclaimed, sub-task byte-offset checkpoints in Redis allow spare replacement nodes to resume execution with zero computation lost and zero duplicate counts.
 
 ### Lifecycle of Workload Phases
 
@@ -351,8 +360,8 @@ The system will be evaluated using standard big data benchmarks under simulated 
 
 | Benchmark | Data Volume | Target Test Scenario |
 | :--- | :--- | :--- |
+| **Historical Financial Analytics** | 125,000 to 50,000,000 trade records | Evaluates VWAP and volume aggregation, sub-task byte checkpointing, and zero-loss recovery under SIGTERM/SIGKILL. |
 | **TeraSort** | 100 GB / 1 TB | Evaluates heavy all-to-all shuffle resilience under artificial 10%, 20%, and 30% hourly preemption waves. |
-| **WordCount** | 500 GB Text | Evaluates high-throughput map streaming and rapid sub-task offset checkpointing. |
 | **TPC-DS (Q1–Q20)** | 1 TB Relational Schema | Evaluates complex multi-stage DAGs with skewed joins and hybrid On-Demand fallback routing. |
 
 #### Chaos Engineering Injection Matrix

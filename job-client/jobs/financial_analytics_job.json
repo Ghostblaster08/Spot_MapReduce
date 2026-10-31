@@ -1,0 +1,9 @@
+{
+  "name": "historical-financial-analytics",
+  "map_fn": "worker.jobs.financial_analytics.map_fn",
+  "reduce_fn": "worker.jobs.financial_analytics.reduce_fn",
+  "input_path": "/data/input/large_input.txt",
+  "output_path": "/data/output",
+  "num_mappers": 3,
+  "num_reducers": 3
+}

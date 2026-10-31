@@ -64,19 +64,23 @@ docker compose exec orchestrator mkdir -p /data/input
 docker compose cp job-client/jobs/sample_input.txt orchestrator:/data/input/sample_input.txt
 ```
 
-### 3. Submit a MapReduce Job
+### 3. Submit a MapReduce Job (Application: Historical Financial Data Analytics)
+
+The framework processes historical market-data files to compute trading volume, Volume-Weighted Average Price (VWAP), simple average execution price, and price extremes by stock symbol:
 
 ```bash
 docker compose run --rm job-client submit \
-  --name wordcount-test \
-  --map-fn worker.jobs.wordcount.map_fn \
-  --reduce-fn worker.jobs.wordcount.reduce_fn \
-  --input /data/input/sample_input.txt \
+  --name financial-analytics \
+  --map-fn worker.jobs.financial_analytics.map_fn \
+  --reduce-fn worker.jobs.financial_analytics.reduce_fn \
+  --input /data/input/large_input.txt \
   --output /data/output \
-  --mappers 4 \
-  --reducers 4 \
+  --mappers 3 \
+  --reducers 3 \
   --wait
 ```
+
+*(Alternatively, run the interactive UI at `http://localhost:8000/flow` or `http://localhost:8000/ui` and click **Run Job**).*
 
 ### 4. Verify Output Correctness
 

@@ -125,9 +125,9 @@ echo -e "Mappers stream intermediate partitions to decoupled RSS; Reducers merge
 JOB_RESP=$(curl -s -X POST http://localhost:8000/jobs \
   -H "Content-Type: application/json" \
   -d '{
-    "name": "baseline-wordcount",
-    "map_fn": "worker.jobs.wordcount.map_fn",
-    "reduce_fn": "worker.jobs.wordcount.reduce_fn",
+    "name": "baseline-market-analytics",
+    "map_fn": "worker.jobs.financial_analytics.map_fn",
+    "reduce_fn": "worker.jobs.financial_analytics.reduce_fn",
     "input_path": "/data/input/large_input.txt",
     "output_path": "/data/output",
     "num_mappers": 4,
@@ -184,8 +184,8 @@ JOB_RESP_2=$(curl -s -X POST http://localhost:8000/jobs \
   -H "Content-Type: application/json" \
   -d '{
     "name": "spot-eviction-test",
-    "map_fn": "worker.jobs.wordcount.map_fn",
-    "reduce_fn": "worker.jobs.wordcount.reduce_fn",
+    "map_fn": "worker.jobs.financial_analytics.map_fn",
+    "reduce_fn": "worker.jobs.financial_analytics.reduce_fn",
     "input_path": "/data/input/large_input.txt",
     "output_path": "/data/output",
     "num_mappers": 4,
@@ -258,8 +258,8 @@ JOB_RESP_3=$(curl -s -X POST http://localhost:8000/jobs \
   -H "Content-Type: application/json" \
   -d '{
     "name": "crash-recovery-test",
-    "map_fn": "worker.jobs.wordcount.map_fn",
-    "reduce_fn": "worker.jobs.wordcount.reduce_fn",
+    "map_fn": "worker.jobs.financial_analytics.map_fn",
+    "reduce_fn": "worker.jobs.financial_analytics.reduce_fn",
     "input_path": "/data/input/large_input.txt",
     "output_path": "/data/output",
     "num_mappers": 4,

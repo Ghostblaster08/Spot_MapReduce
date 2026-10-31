@@ -60,24 +60,22 @@ def seed_input_data():
 
         # 1. Copy sample_input.txt if available
         sample_path = os.path.join(input_dir, "sample_input.txt")
-        if not os.path.exists(sample_path) and os.path.exists(seed_dir):
+        if os.path.exists(seed_dir):
             seed_sample = os.path.join(seed_dir, "sample_input.txt")
             if os.path.exists(seed_sample):
                 shutil.copy2(seed_sample, sample_path)
                 log.info(f"Seeded {sample_path} from {seed_sample}")
                 record_event("STORAGE", "Seeded sample_input.txt into /data/input", "info")
 
-        # 2. Generate large_input.txt (4.4 MB / 77,500 lines) if not present
+        # 2. Copy large_input.txt if available
         large_path = os.path.join(input_dir, "large_input.txt")
-        if not os.path.exists(large_path) and os.path.exists(sample_path):
-            with open(sample_path, "r", encoding="utf-8") as f:
-                content = f.read()
-            with open(large_path, "w", encoding="utf-8") as f:
-                for _ in range(2500):
-                    f.write(content)
-            size_mb = os.path.getsize(large_path) / (1024 * 1024)
-            log.info(f"Generated {large_path} ({size_mb:.2f} MB, 77,500 lines)")
-            record_event("STORAGE", f"Generated large_input.txt ({size_mb:.2f} MB, 77,500 lines)", "info")
+        if os.path.exists(seed_dir):
+            seed_large = os.path.join(seed_dir, "large_input.txt")
+            if os.path.exists(seed_large):
+                shutil.copy2(seed_large, large_path)
+                size_mb = os.path.getsize(large_path) / (1024 * 1024)
+                log.info(f"Seeded {large_path} from {seed_large} ({size_mb:.2f} MB)")
+                record_event("STORAGE", f"Seeded large_input.txt ({size_mb:.2f} MB)", "info")
     except Exception as e:
         log.warning(f"Error seeding input data: {e}")
 
@@ -248,7 +246,6 @@ def inspect_job_output(job_id: str, output_base: str = "/data/output") -> Dict[s
 
     sample_words = []
     total_lines = 0
-    # Read first partition or combined top words
     word_counts = []
     for p in partitions:
         p_path = os.path.join(job_dir, p)
@@ -258,14 +255,26 @@ def inspect_job_output(job_id: str, output_base: str = "/data/output") -> Dict[s
                     total_lines += 1
                     parts = line.strip().split("\t", 1)
                     if len(parts) == 2:
-                        word, count = parts[0], int(parts[1])
-                        word_counts.append((word, count))
+                        k, val_str = parts[0], parts[1]
+                        count = 0
+                        if "VOL:" in val_str:
+                            try:
+                                vol_part = val_str.split("VOL:")[1].split("|")[0].strip().replace(",", "")
+                                count = int(vol_part)
+                            except Exception:
+                                count = 1
+                        else:
+                            try:
+                                count = int(val_str)
+                            except Exception:
+                                count = 1
+                        word_counts.append((k, count, val_str))
         except Exception:
             pass
 
-    # Sort descending by count
+    # Sort descending by volume or count
     word_counts.sort(key=lambda x: x[1], reverse=True)
-    sample_words = [{"word": w, "count": c} for w, c in word_counts[:12]]
+    sample_words = [{"word": w, "count": c, "summary": s} for w, c, s in word_counts[:15]]
 
     return {
         "exists": True,
@@ -273,12 +282,13 @@ def inspect_job_output(job_id: str, output_base: str = "/data/output") -> Dict[s
         "partition_count": len(partitions),
         "partitions": partitions,
         "total_unique_words": len(word_counts),
+        "total_unique_keys": len(word_counts),
         "total_lines": total_lines,
         "top_words": sample_words
     }
 
 def verify_ground_truth(input_path: str, output_base: str, job_id: str) -> Dict[str, Any]:
-    """Computes exact single-node word count ground truth and compares against job output."""
+    """Computes exact single-node ground truth (financial volume or wordcount) and compares against job output."""
     if not os.path.exists(input_path):
         return {"status": "ERROR", "message": f"Input file not found: {input_path}"}
 
@@ -286,13 +296,81 @@ def verify_ground_truth(input_path: str, output_base: str, job_id: str) -> Dict[
     if not os.path.exists(job_dir):
         return {"status": "ERROR", "message": f"Output dir not found: {job_dir}"}
 
-    # 1. Ground truth
+    # Detect if CSV market data
+    is_csv_market = False
+    with open(input_path, "r", encoding="utf-8") as f:
+        first_line = f.readline()
+        if "," in first_line:
+            is_csv_market = True
+
+    if is_csv_market:
+        expected = Counter()
+        with open(input_path, "r", encoding="utf-8") as f:
+            for line in f:
+                parts = line.strip().split(",")
+                if len(parts) >= 4:
+                    try:
+                        sym = parts[1].strip().upper()
+                        vol = int(float(parts[3].strip()))
+                        if sym and vol > 0:
+                            expected[sym] += vol
+                    except Exception:
+                        pass
+
+        actual = Counter()
+        partitions = sorted([f for f in os.listdir(job_dir) if f.startswith("part-")])
+        for p in partitions:
+            with open(os.path.join(job_dir, p), "r", encoding="utf-8") as f:
+                for line in f:
+                    parts = line.strip().split("\t", 1)
+                    if len(parts) == 2:
+                        sym = parts[0]
+                        val_str = parts[1]
+                        if "VOL:" in val_str:
+                            try:
+                                v = int(val_str.split("VOL:")[1].split("|")[0].strip().replace(",", ""))
+                                actual[sym] = v
+                            except Exception:
+                                pass
+                        else:
+                            try:
+                                actual[sym] = int(val_str)
+                            except Exception:
+                                pass
+
+        diffs = []
+        for sym, exp_v in expected.items():
+            act_v = actual.get(sym, 0)
+            if act_v != exp_v:
+                diffs.append({"symbol": sym, "expected": exp_v, "actual": act_v})
+
+        for sym in actual:
+            if sym not in expected:
+                diffs.append({"symbol": sym, "expected": 0, "actual": actual[sym]})
+
+        if not diffs and len(actual) > 0:
+            return {
+                "status": "PASS",
+                "matches": True,
+                "unique_words_verified": len(actual),
+                "total_words_processed": sum(actual.values()),
+                "message": f"Zero discrepancies! Verified {len(actual)} stock symbols ({sum(actual.values()):,} total shares traded)."
+            }
+        else:
+            return {
+                "status": "FAIL",
+                "matches": False,
+                "discrepancies_count": len(diffs),
+                "discrepancies_sample": diffs[:10],
+                "message": f"Discrepancies detected across {len(diffs)} symbols."
+            }
+
+    # Standard wordcount ground truth fallback
     with open(input_path, "r", encoding="utf-8") as f:
         text = f.read().lower()
     words = re.findall(r"[a-zA-Z0-9]+", text)
     expected = Counter(words)
 
-    # 2. Output partitions
     actual = Counter()
     partitions = sorted([f for f in os.listdir(job_dir) if f.startswith("part-")])
     for p in partitions:
@@ -300,9 +378,11 @@ def verify_ground_truth(input_path: str, output_base: str, job_id: str) -> Dict[
             for line in f:
                 parts = line.strip().split("\t", 1)
                 if len(parts) == 2:
-                    actual[parts[0]] = int(parts[1])
+                    try:
+                        actual[parts[0]] = int(parts[1])
+                    except Exception:
+                        pass
 
-    # 3. Diff
     diffs = []
     for word, exp_count in expected.items():
         act_count = actual.get(word, 0)
@@ -633,8 +713,8 @@ async def dashboard_upload_job(payload: JobUploadPayload):
         raise HTTPException(status_code=400, detail="Uploaded file content cannot be empty.")
 
     safe_name = os.path.basename(payload.filename).replace(" ", "_")
-    if not safe_name.endswith(".txt"):
-        safe_name = f"{safe_name}.txt"
+    if not (safe_name.endswith(".txt") or safe_name.endswith(".csv")):
+        safe_name = f"{safe_name}.csv"
 
     input_dir = "/data/input"
     os.makedirs(input_dir, exist_ok=True)
@@ -649,8 +729,8 @@ async def dashboard_upload_job(payload: JobUploadPayload):
     job_name = payload.name or f"upload-{safe_name[:12]}-{int(time.time())}"
     job_id = await create_job_and_map_tasks(
         name=job_name,
-        map_fn="worker.jobs.wordcount.map_fn",
-        reduce_fn="worker.jobs.wordcount.reduce_fn",
+        map_fn="worker.jobs.financial_analytics.map_fn",
+        reduce_fn="worker.jobs.financial_analytics.reduce_fn",
         input_path=input_path,
         output_path="/data/output",
         num_mappers=payload.num_mappers,
@@ -692,8 +772,8 @@ async def dashboard_submit_job(
 
     job_id = await create_job_and_map_tasks(
         name=job_name,
-        map_fn="worker.jobs.wordcount.map_fn",
-        reduce_fn="worker.jobs.wordcount.reduce_fn",
+        map_fn="worker.jobs.financial_analytics.map_fn",
+        reduce_fn="worker.jobs.financial_analytics.reduce_fn",
         input_path=input_path,
         output_path="/data/output",
         num_mappers=num_mappers,

@@ -171,6 +171,17 @@
   #toast { position: absolute; z-index: 50; left: 50%; bottom: 70px; transform: translateX(-50%) translateY(20px); opacity: 0;
     background: #23232b; border: 1px solid var(--line); padding: 9px 16px; border-radius: 10px; font-size: 12.5px; transition: all .25s; pointer-events: none; }
   #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+  /* ── upload modal ── */
+  .flow-modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.7); backdrop-filter: blur(6px); display: none; align-items: center; justify-content: center; z-index: 999; }
+  .flow-modal-overlay.open { display: flex; }
+  .flow-modal-card { background: #13131c; border: 1px solid var(--line); border-radius: 14px; width: 450px; max-width: 90vw; padding: 20px; box-shadow: 0 20px 50px rgba(0,0,0,.7); }
+  .flow-modal-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; }
+  .flow-modal-title { font-size: 14px; font-weight: 700; color: var(--txt); }
+  .flow-modal-close { background: transparent; border: none; color: var(--dim); font-size: 18px; cursor: pointer; padding: 4px; line-height: 1; }
+  .flow-modal-close:hover { color: var(--txt); }
+  .flow-dropzone { border: 2px dashed rgba(255,255,255,.16); border-radius: 10px; padding: 24px 16px; text-align: center; cursor: pointer; transition: border-color .2s, background .2s; }
+  .flow-dropzone:hover { border-color: var(--blue); background: rgba(107,155,255,.05); }
 </style>
 </head>
 <body>
@@ -214,6 +225,7 @@
   <!-- actions -->
   <div class="panel" id="p-actions">
     <span class="target-chip">TARGET <b id="target-name">auto</b></span>
+    <button class="btn" id="b-upload" title="Upload custom CSV or market data">📁 Upload CSV</button>
     <button class="btn go" id="b-run">▶ Run job</button>
     <button class="btn warn" id="b-pre" title="SIGTERM: 15s drain, then the node exits">⚡ Preempt</button>
     <button class="btn bad" id="b-kill" title="SIGKILL: no warning">💥 Crash</button>
@@ -234,6 +246,28 @@
   <div class="panel" id="p-stats"><span><b id="s-comp">0</b> COMPONENTS</span><span><b id="s-conn">0</b> CONNECTIONS</span><span><b id="s-time">0.0s</b></span></div>
   <div class="panel" id="p-zoom"><button id="z-out">−</button><span id="zoom-pct">100%</span><button id="z-in">+</button><button id="z-fit" title="Fit to screen">⛶</button></div>
   <div id="toast"></div>
+
+  <!-- Upload Modal -->
+  <div class="flow-modal-overlay" id="flow-upload-modal">
+    <div class="flow-modal-card">
+      <div class="flow-modal-head">
+        <div class="flow-modal-title">Upload Custom Market Dataset</div>
+        <button class="flow-modal-close" id="flow-modal-close">✕</button>
+      </div>
+      <div class="flow-dropzone" id="flow-dropzone">
+        <input type="file" id="flow-file-input" accept=".csv,.txt,.log" style="display:none">
+        <div style="font-size:32px;margin-bottom:8px">📈</div>
+        <div style="font-size:13.5px;font-weight:600;color:var(--txt)">Click to browse or drop any CSV file here</div>
+        <div style="font-size:11px;color:var(--dim);margin-top:6px">Format: timestamp,symbol,price,volume (header auto-skipped)</div>
+      </div>
+      <div id="flow-file-status" style="display:none;margin-top:12px;padding:9px 12px;background:rgba(255,255,255,.05);border:1px solid var(--line);border-radius:8px;font-family:var(--mono);font-size:11.5px;color:var(--cyan)">
+      </div>
+      <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:16px">
+        <button class="btn" id="flow-btn-cancel">Cancel</button>
+        <button class="btn go" id="flow-btn-submit" disabled>▶ Run on 3 Nodes</button>
+      </div>
+    </div>
+  </div>
 </div>
 
 <script>
@@ -295,7 +329,7 @@ for (let i = 0; i < 5; i++) {
 let rssBody = `<div style="padding:7px 11px 8px;height:70px"><div class="m-sub" style="margin:0"><span>Remote Shuffle Service :8001</span></div>
   <div class="m-row" style="margin-top:3px"><div><span class="m-big" id="rss-total">0</span><span class="m-lbl">RECORDS</span></div>
   <span class="n-tag t-cyan" style="font-size:8.5px">OFF-NODE · SURVIVES EVICTION</span></div></div>`;
-for (let j = 0; j < 3; j++) rssBody += `<div class="row" style="height:58px"><div class="l"><b>P${j}</b><small>hash(word) % 3 == ${j}</small></div>
+for (let j = 0; j < 3; j++) rssBody += `<div class="row" style="height:58px"><div class="l"><b>P${j}</b><small>hash(symbol) % 3 == ${j}</small></div>
   <div class="r"><span id="rss-rec${j}">0</span> rec<small id="rss-ch${j}">0 chunks</small></div><div class="bar"><i id="rss-bar${j}"></i></div></div>`;
 parts.push(nodeShell('n-rss', 'c-cyan', 760, 150, 270, 70 + 3 * 58 + 38, 'layers', 'Shuffle', 'rss-tag', 'RSS', rssBody));
 
@@ -323,7 +357,7 @@ parts.push(nodeShell('n-out', 'c-green', 1520, 262, 230, 112, 'check', 'Output',
 parts.push(`<div class="group" style="left:380px;top:66px">ACTIVE MAPPERS</div>`);
 parts.push(`<div class="group" style="left:380px;top:${workerY(3) - 26}px">HOT STANDBY SPARES</div>`);
 parts.push(`<div class="note" style="left:40px;top:42px;width:300px">The orchestrator cuts the file into byte ranges and hands one to each mapper.</div>`);
-parts.push(`<div class="note" style="left:40px;top:284px;width:250px">Each range ends on a line boundary so no word is split between two nodes.</div>`);
+parts.push(`<div class="note" style="left:40px;top:284px;width:250px">Each range ends on a line boundary so no trade record is split between two nodes.</div>`);
 parts.push(`<div class="note" style="left:760px;top:676px;width:300px">Shuffle data is pushed off the node. A dead worker loses only what it had not yet sent.</div>`);
 parts.push(`<div class="note" id="note-fault" style="left:380px;top:732px;width:340px">Click a node, then Preempt or Crash. A spare picks up its task from the last Redis checkpoint.</div>`);
 world.insertAdjacentHTML('beforeend', parts.join(''));
@@ -424,6 +458,67 @@ document.getElementById('b-run').onclick   = () => post('/dashboard/submit-job?d
 document.getElementById('b-reset').onclick = () => { target = null; syncTarget(); post('/dashboard/reset', 'Cluster reset'); };
 document.getElementById('b-pre').onclick   = () => post('/dashboard/simulate-preemption?grace_seconds=15&auto_spawn=true' + (target ? '&target_node=' + encodeURIComponent(target) : ''), 'SIGTERM sent: draining');
 document.getElementById('b-kill').onclick  = () => post('/dashboard/simulate-crash?auto_spawn=true' + (target ? '&target_node=' + encodeURIComponent(target) : ''), 'SIGKILL sent');
+
+/* ── Upload Modal Handler ── */
+const uploadModal = document.getElementById('flow-upload-modal');
+const fileInput = document.getElementById('flow-file-input');
+const dropzone = document.getElementById('flow-dropzone');
+const fileStatus = document.getElementById('flow-file-status');
+const btnSubmit = document.getElementById('flow-btn-submit');
+let uploadedName = null;
+let uploadedContent = null;
+
+document.getElementById('b-upload').onclick = () => { uploadModal.classList.add('open'); };
+const closeFlowModal = () => { uploadModal.classList.remove('open'); };
+document.getElementById('flow-modal-close').onclick = closeFlowModal;
+document.getElementById('flow-btn-cancel').onclick = closeFlowModal;
+
+dropzone.onclick = () => fileInput.click();
+dropzone.ondragover = (e) => { e.preventDefault(); dropzone.style.borderColor = 'var(--cyan)'; };
+dropzone.ondragleave = () => { dropzone.style.borderColor = 'rgba(255,255,255,.16)'; };
+dropzone.ondrop = async (e) => {
+  e.preventDefault();
+  dropzone.style.borderColor = 'rgba(255,255,255,.16)';
+  if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+    handleFile(e.dataTransfer.files[0]);
+  }
+};
+fileInput.onchange = (e) => {
+  if (e.target.files && e.target.files[0]) {
+    handleFile(e.target.files[0]);
+  }
+};
+async function handleFile(file) {
+  uploadedName = file.name;
+  uploadedContent = await file.text();
+  const lines = uploadedContent.split('\n').filter(l => l.trim()).length;
+  fileStatus.style.display = 'block';
+  fileStatus.innerHTML = `📄 <b>${file.name}</b> · ${(file.size / 1024).toFixed(1)} KB · ${lines.toLocaleString()} records`;
+  btnSubmit.disabled = false;
+}
+btnSubmit.onclick = async () => {
+  if (!uploadedContent) return;
+  closeFlowModal();
+  toast('Uploading dataset & scheduling job…');
+  try {
+    const res = await fetch('/dashboard/upload-job', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        filename: uploadedName,
+        content: uploadedContent,
+        num_mappers: 3,
+        num_reducers: 3
+      })
+    });
+    const d = await res.json();
+    if (!res.ok) throw new Error(d.detail || 'Upload failed');
+    toast(`Job scheduled: ${d.name || d.job_id}`);
+    poll();
+  } catch (err) {
+    toast('Error: ' + err.message);
+  }
+};
 let lastWorkers = [];
 function syncTarget() {
   document.querySelectorAll('.node.selected').forEach(n => n.classList.remove('selected'));
@@ -624,7 +719,7 @@ function render(state) {
   const out = state.output || {};
   if (out.exists) {
     setTxt('out-big', `${out.partition_count || 0} files`); setTxt('out-lbl', out.is_success ? 'SUCCESS' : 'WRITING');
-    setTxt('out-sub', `${(out.total_unique_words || 0).toLocaleString()} unique words`);
+    setTxt('out-sub', `${(out.total_unique_keys || out.total_unique_words || 0).toLocaleString()} stock symbols`);
     setTxt('out-sub2', out.is_success ? '_SUCCESS marker present ✓' : 'part files appearing…');
     $('out-tag').className = 'n-tag ' + (out.is_success ? 't-ok' : 't-blue'); setTxt('out-tag', out.is_success ? 'VERIFIED' : 'LAPTOP DISK');
   } else { setTxt('out-big', '–'); setTxt('out-lbl', 'NO OUTPUT'); setTxt('out-sub', '/data/output'); setTxt('out-sub2', ''); setTxt('out-tag', 'LAPTOP DISK'); $('out-tag').className = 'n-tag'; }

@@ -645,11 +645,11 @@
       <span class="badge-chip chip-gray" id="hdr-fleet-status">Fleet: 5 Nodes [3 Active • 2 Spare]</span>
     </div>
     <div class="header-actions">
-      <button class="btn btn-primary" onclick="submitDefaultJob()" title="Starts 3-Mapper, 3-Reducer distributed job across active nodes">
-        ▶ Run WordCount (4.4MB)
+      <button class="btn btn-primary" onclick="submitDefaultJob()" title="Starts 3-Mapper, 3-Reducer distributed market analytics job across active nodes">
+        ▶ Run Financial Analytics (4.25MB)
       </button>
-      <button class="btn btn-outline" onclick="openUploadModal()" title="Upload any custom text file">
-        📁 Custom File
+      <button class="btn btn-outline" onclick="openUploadModal()" title="Upload any custom market data CSV or text file">
+        📁 Custom CSV / Dataset
       </button>
       <button class="btn btn-amber" onclick="simulatePreemption()" title="Sends SIGTERM preemption notice to active busy worker container">
         ⚡ Preempt Active Node
@@ -840,9 +840,9 @@
         <button class="btn btn-outline btn-xs" onclick="closeUploadModal()">✕</button>
       </div>
       <div class="dropzone-box" id="modal-dropzone">
-        <input type="file" id="modal-file-input" class="file-input-hide" accept=".txt,.csv,.log,.md">
-        <div style="font-size: 24px; margin-bottom: 6px;">📄</div>
-        <div style="font-weight: 500;">Click to browse or drop any text file here</div>
+        <input type="file" id="modal-file-input" class="file-input-hide" accept=".csv,.txt,.log">
+        <div style="font-size: 24px; margin-bottom: 6px;">📈</div>
+        <div style="font-weight: 500;">Click to browse or drop any CSV / market-data file here</div>
         <div style="font-size: 11px; color: var(--g-gray-700); margin-top: 4px;">File will be saved to <code class="code-pill">/data/input</code> and executed across 3 nodes</div>
       </div>
       <div id="modal-file-status" style="display: none; padding: 6px 10px; background: var(--g-gray-100); border-radius: 4px; font-size: 11px;">
@@ -851,7 +851,7 @@
       <div style="display: flex; justify-content: flex-end; gap: 8px;">
         <button class="btn btn-outline" onclick="closeUploadModal()">Cancel</button>
         <button class="btn btn-primary" id="btn-modal-submit" onclick="submitModalUploadedFile()" disabled>
-          ▶ Execute WordCount on 3 Nodes
+          ▶ Execute Financial Analytics on 3 Nodes
         </button>
       </div>
     </div>
@@ -1321,7 +1321,7 @@
         `;
       }).join('');
 
-      // 6. Row 3: Verified WordCount Output Chips
+      // 6. Row 3: Verified Financial Analytics / Output Chips
       const wordsBox = document.getElementById('top-words-container');
       const output = state.output || {};
       const verifBadge = document.getElementById('verif-result-badge');
@@ -1329,11 +1329,11 @@
         verifBadge.className = 'badge-chip chip-green';
         verifBadge.textContent = '100% Exact Match';
         document.getElementById('output-meta-info').innerHTML =
-          `Output: <code style="font-size: 10px;">/data/output/${job ? job.job_id : ''}</code> • <strong>${output.total_unique_words} unique words</strong> (${output.total_lines.toLocaleString()} total)`;
-        wordsBox.innerHTML = output.top_words.slice(0, 10).map(w => `
-          <div class="word-badge">
+          `Output: <code style="font-size: 10px;">/data/output/${job ? job.job_id : ''}</code> • <strong>${output.total_unique_words} stock symbols</strong> (${output.total_lines.toLocaleString()} total)`;
+        wordsBox.innerHTML = output.top_words.slice(0, 12).map(w => `
+          <div class="word-badge" title="${escapeHtml(w.summary || '')}">
             <span class="word-name">${escapeHtml(w.word)}</span>
-            <span class="word-cnt">${w.count.toLocaleString()}</span>
+            <span class="word-cnt">${w.count.toLocaleString()} vol</span>
           </div>
         `).join('');
       } else {
