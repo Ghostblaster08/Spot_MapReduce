@@ -9,42 +9,7 @@ This cookbook provides a complete, step-by-step technical guide for setting up, 
 
 ### Core System Topology
 
-```
-                       ┌──────────────────────────────────────────────┐
-                       │          Master Orchestrator (:8000)         │
-                       │          FastAPI • SQLite (WAL Mode)         │
-                       │    - Task Scheduler & Barrier Coordinator    │
-                       │    - Heartbeat Lease Expiry Watchdog         │
-                       │    - Docker Autoscaler (Spares & Recovery)   │
-                       └──────────────▲────────────────▲──────────────┘
-                                      │                │
-                    Heartbeat & Lease │                │ Poll Tasks / Lease Claims
-                                      │                │
-        ┌─────────────────────────────┴────────────────┴─────────────────────────────┐
-        │                                                                            │
- ┌──────┴─────────────────────────┐                          ┌───────────────────────┴────────┐
- │   Spot Worker 1..3 (Active)    │                          │   Spot Worker 4..5 (Spares)    │
- │ - Sub-task line reader         │                          │ - Hot standby in idle pool     │
- │ - Partition hasher (% num_red) │                          │ - Instant lease takeover on    │
- │ - Checkpoint engine (Redis)    │                          │   preemption or worker crash   │
- │ - SIGTERM Sentinel (15s drain) │                          │ - Resumes from exact byte ptr  │
- └──────────────┬─────────────────┘                          └────────────────▲───────────────┘
-                │                                                             │
-                │ HTTP POST /chunks (NDJSON)                                  │ HTTP GET /chunks
-                ▼                                                             │
- ┌────────────────────────────────────────────────────────────────────────────┴───────────────┐
- │                            Remote Shuffle Service (RSS :8001)                              │
- │ - Decoupled shuffle partition storage (/data/rss)                                          │
- │ - In-memory slabs + chunk files + partition manifest.json                                  │
- └─────────────────────────────────────────────▲──────────────────────────────────────────────┘
-                                               │
-                                               │ Atomic CAS Lua Script & Byte Offsets
- ┌─────────────────────────────────────────────┴──────────────────────────────────────────────┐
- │                                   Redis 7.2 Store (:6379)                                  │
- │ - Monotonic fencing tokens (prevents zombie worker writes)                                 │
- │ - Sub-task byte offsets (f.tell() pointers for instant resume)                             │
- └────────────────────────────────────────────────────────────────────────────────────────────┘
-```
+![Spot MapReduce Core System Topology](docs/screenshots/00_arch_system_topology.png)
 
 ---
 
@@ -265,28 +230,7 @@ QQQ	VOL: 19,121,660 | TRADES: 8,399 | VWAP: $491.55 | AVG: $491.55 | RANGE: [$48
 
 To deploy the entire solution to AWS, leverage 3 core services:
 
-```
-                  ┌────────────────────────────────────────────────────────┐
-                  │                 Amazon Web Services                    │
-                  │                                                        │
-                  │   ┌────────────────────────────────────────────────┐   │
-                  │   │        Amazon EC2 (c7i-flex.large)             │   │
-                  │   │   Ubuntu 24.04 / 26.04 Host                    │   │
-                  │   │   - Spot MapReduce Docker Compose Stack        │   │
-                  │   │   - IAM Role: SpotMapReduce-EC2-Role           │   │
-                  │   └───────────────▲────────────────▲───────────────┘   │
-                  │                   │                │                   │
-                  │     Input / Output│                │ PutMetricData     │
-                  │     Sync          │                │ Custom Metrics    │
-                  │                   ▼                ▼                   │
-                  │   ┌──────────────────────┐   ┌─────────────────────┐   │
-                  │   │      Amazon S3       │   │  Amazon CloudWatch  │   │
-                  │   │   Bucket:            │   │  Namespace:         │   │
-                  │   │   spot-mapreduce-    │   │  SpotMapReduce      │   │
-                  │   │   lab-ghostblaster   │   │  (Live AWS Graphs)  │   │
-                  │   └──────────────────────┘   └─────────────────────┘   │
-                  └────────────────────────────────────────────────────────┘
-```
+![AWS Cloud Production Multi-Service Architecture](docs/screenshots/00_arch_aws_cloud.png)
 
 ### Step 9.1: Launch the EC2 Host Instance
 1. In AWS Console $\rightarrow$ **EC2** $\rightarrow$ **Launch instance**.

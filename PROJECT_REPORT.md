@@ -17,42 +17,7 @@ This project designs and implements **Spot MapReduce**, a specialized distribute
 
 ## 2. System Architecture
 
-```
-                       ┌──────────────────────────────────────────────┐
-                       │          Master Orchestrator (:8000)         │
-                       │          FastAPI • SQLite (WAL Mode)         │
-                       │    - Task Scheduler & Barrier Coordinator    │
-                       │    - Heartbeat Lease Expiry Watchdog         │
-                       │    - Standby Spare Node Autoscaler           │
-                       └──────────────▲────────────────▲──────────────┘
-                                      │                │
-                    Heartbeat & Lease │                │ Poll Tasks / Lease Claims
-                                      │                │
-        ┌─────────────────────────────┴────────────────┴─────────────────────────────┐
-        │                                                                            │
- ┌──────┴─────────────────────────┐                          ┌───────────────────────┴────────┐
- │   Spot Worker 1..3 (Active)    │                          │   Spot Worker 4..5 (Spares)    │
- │ - Sub-task line reader         │                          │ - Hot standby in idle pool     │
- │ - Partition hasher (% num_red) │                          │ - Instant lease takeover on    │
- │ - Checkpoint engine (Redis)    │                          │   preemption or worker crash   │
- │ - SIGTERM Sentinel (15s drain) │                          │ - Resumes from exact byte ptr  │
- └──────────────┬─────────────────┘                          └────────────────▲───────────────┘
-                │                                                             │
-                │ HTTP POST /chunks (NDJSON)                                  │ HTTP GET /chunks
-                ▼                                                             │
- ┌────────────────────────────────────────────────────────────────────────────┴───────────────┐
- │                            Remote Shuffle Service (RSS :8001)                              │
- │ - Decoupled shuffle partition storage (/data/rss)                                          │
- │ - In-memory slabs + chunk files + partition manifest.json                                  │
- └─────────────────────────────────────────────▲──────────────────────────────────────────────┘
-                                               │
-                                               │ Atomic CAS Lua Script & Byte Offsets
- ┌─────────────────────────────────────────────┴──────────────────────────────────────────────┐
- │                                   Redis 7.2 Store (:6379)                                  │
- │ - Monotonic fencing tokens (prevents zombie worker writes)                                 │
- │ - Sub-task byte offsets (f.tell() pointers for instant resume)                             │
- └────────────────────────────────────────────────────────────────────────────────────────────┘
-```
+![Spot MapReduce Core System Topology](docs/screenshots/00_arch_system_topology.png)
 
 ### Core Architecture Pillars
 
@@ -100,28 +65,7 @@ NVDA	VOL: 13,214,417 | TRADES: 8,454 | VWAP: $136.99 | AVG: $137.01 | RANGE: [$1
 
 The project was fully deployed and verified on **Amazon Web Services (AWS)** using three interconnected services:
 
-```
-                  ┌────────────────────────────────────────────────────────┐
-                  │                 Amazon Web Services                    │
-                  │                                                        │
-                  │   ┌────────────────────────────────────────────────┐   │
-                  │   │        Amazon EC2 (c7i-flex.large)             │   │
-                  │   │   Host VM on Ubuntu 24.04                      │   │
-                  │   │   - 10 Container Docker Compose Topology       │   │
-                  │   │   - IAM Role: SpotMapReduce-EC2-Role           │   │
-                  │   └───────────────▲────────────────▲───────────────┘   │
-                  │                   │                │                   │
-                  │     Input / Output│                │ PutMetricData     │
-                  │     Sync          │                │ Custom Metrics    │
-                  │                   ▼                ▼                   │
-                  │   ┌──────────────────────┐   ┌─────────────────────┐   │
-                  │   │      Amazon S3       │   │  Amazon CloudWatch  │   │
-                  │   │   Bucket:            │   │  Namespace:         │   │
-                  │   │   spot-mapreduce-    │   │  SpotMapReduce      │   │
-                  │   │   lab-ghostblaster   │   │  (Live AWS Graphs)  │   │
-                  │   └──────────────────────┘   └─────────────────────┘   │
-                  └────────────────────────────────────────────────────────┘
-```
+![AWS Cloud Production Multi-Service Architecture](docs/screenshots/00_arch_aws_cloud.png)
 
 1. **Amazon EC2 (`c7i-flex.large`):**
    Hosts the 10-container MapReduce cluster, Docker daemon integration, Prometheus, Grafana, and Dozzle.
